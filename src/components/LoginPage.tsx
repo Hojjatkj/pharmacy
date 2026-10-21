@@ -1,18 +1,22 @@
 import BrandMark from './BrandMark';
-import React, { FormEvent, useState } from 'react';
+import { useState, type FormEvent } from 'react';
 
 import { login } from '../api/auth';
+import { getUserMessage } from '../lib/errors';
 
 interface LoginPageProps {
   onLoginSuccess: () => void;
   onRegister: () => void;
   onBackToLanding?: () => void;
+  /** Session-expiry / forced-logout message shown above the form. */
+  notice?: string | null;
 }
 
 export function LoginPage({
     onLoginSuccess,
     onRegister,
     onBackToLanding,
+    notice,
   }: LoginPageProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -37,11 +41,7 @@ export function LoginPage({
 
       onLoginSuccess();
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'ورود انجام نشد. لطفاً اطلاعات حساب را بررسی کنید.',
-      );
+      setError(getUserMessage(err, 'ورود انجام نشد. لطفاً اطلاعات حساب را بررسی کنید.'));
     } finally {
       setLoading(false);
     }
@@ -316,9 +316,21 @@ export function LoginPage({
                   </div>
                 </div>
 
+                {notice && !error && (
+                  <div
+                    role="status"
+                    className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-sm text-amber-800"
+                  >
+                    <span className="leading-6">{notice}</span>
+                  </div>
+                )}
+
                 {/* Error */}
                 {error && (
-                  <div className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-sm text-rose-700">
+                  <div
+                    role="alert"
+                    className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-sm text-rose-700"
+                  >
                     <svg
                       viewBox="0 0 24 24"
                       className="mt-0.5 h-5 w-5 shrink-0"

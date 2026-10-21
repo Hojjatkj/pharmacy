@@ -1,0 +1,8 @@
+node_modules
+dist
+dist.bak*
+coverage
+package-lock.json
+*.bak
+*.bak-*
+public/fonts

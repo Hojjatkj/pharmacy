@@ -1,6 +1,7 @@
 import React, {
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
@@ -33,6 +34,10 @@ import {
 
 import { MeResponse } from '../api/auth';
 import { Pharmacy } from '../types';
+import { getUserMessage } from '../lib/errors';
+import { reportError } from '../lib/telemetry';
+import { useConfirm } from '../hooks/useConfirm';
+import { useDialogBehavior } from '../hooks/useDialogBehavior';
 
 interface AdminUsersPageProps {
   pharmacies: Pharmacy[];
@@ -71,6 +76,13 @@ export const AdminUsersPage: React.FC<
   pharmacies,
   currentUser,
 }) => {
+  const confirm = useConfirm();
+
+  const createDialogRef = useRef<HTMLDivElement>(null);
+  const editDialogRef = useRef<HTMLDivElement>(null);
+  const resetDialogRef = useRef<HTMLDivElement>(null);
+  const deleteDialogRef = useRef<HTMLDivElement>(null);
+
   const [users, setUsers] = useState<UserItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -133,6 +145,11 @@ export const AdminUsersPage: React.FC<
   const [resetPasswordConfirm, setResetPasswordConfirm] =
     useState('');
 
+  useDialogBehavior(Boolean(creatingUser), () => setCreatingUser(false), createDialogRef);
+  useDialogBehavior(Boolean(editingUser), () => setEditingUser(null), editDialogRef);
+  useDialogBehavior(Boolean(resetTarget), () => setResetTarget(null), resetDialogRef);
+  useDialogBehavior(Boolean(deleteTarget), () => setDeleteTarget(null), deleteDialogRef);
+
   const loadUsers = async () => {
     try {
       setLoading(true);
@@ -142,12 +159,10 @@ export const AdminUsersPage: React.FC<
       const result = await getUsers();
       setUsers(result);
     } catch (err) {
-      console.error(err);
+      reportError('AdminUsersPage', err);
 
       setError(
-        err instanceof Error
-          ? err.message
-          : 'دریافت فهرست کاربران با خطا مواجه شد.',
+        getUserMessage(err, 'دریافت فهرست کاربران با خطا مواجه شد.'),
       );
     } finally {
       setLoading(false);
@@ -307,9 +322,11 @@ export const AdminUsersPage: React.FC<
           : createPharmacyId,
     };
 
-    const confirmed = window.confirm(
-      `آیا از ایجاد کاربر با نقش «${roleLabel(createRole)}» مطمئن هستید؟\n\nرمز واردشده به عنوان رمز موقت ثبت خواهد شد.`,
-    );
+    const confirmed = await confirm({
+      title: `ایجاد کاربر با نقش «${roleLabel(createRole)}»`,
+      message: 'رمز واردشده به عنوان رمز موقت ثبت خواهد شد.',
+      confirmLabel: 'ایجاد کاربر',
+    });
 
     if (!confirmed) {
       return;
@@ -335,12 +352,10 @@ export const AdminUsersPage: React.FC<
 
       closeCreateUser();
     } catch (err) {
-      console.error(err);
+      reportError('AdminUsersPage', err);
 
       setError(
-        err instanceof Error
-          ? err.message
-          : 'ایجاد کاربر با خطا مواجه شد.',
+        getUserMessage(err, 'ایجاد کاربر با خطا مواجه شد.'),
       );
     } finally {
       setSaving(false);
@@ -476,9 +491,13 @@ export const AdminUsersPage: React.FC<
       (editingUser.pharmacyId ?? '');
 
     if (roleChanged || pharmacyChanged) {
-      const confirmed = window.confirm(
-        'این تغییر می‌تواند سطح دسترسی یا محدوده دسترسی کاربر را تغییر دهد. آیا از ادامه عملیات مطمئن هستید؟',
-      );
+      const confirmed = await confirm({
+        title: 'تغییر سطح دسترسی',
+        message:
+          'این تغییر می‌تواند سطح دسترسی یا محدوده دسترسی کاربر را تغییر دهد. آیا از ادامه عملیات مطمئن هستید؟',
+        confirmLabel: 'ادامه',
+        tone: 'danger',
+      });
 
       if (!confirmed) {
         return;
@@ -522,12 +541,10 @@ export const AdminUsersPage: React.FC<
 
       closeEdit();
     } catch (err) {
-      console.error(err);
+      reportError('AdminUsersPage', err);
 
       setError(
-        err instanceof Error
-          ? err.message
-          : 'ویرایش کاربر انجام نشد.',
+        getUserMessage(err, 'ویرایش کاربر انجام نشد.'),
       );
     } finally {
       setSaving(false);
@@ -554,11 +571,12 @@ export const AdminUsersPage: React.FC<
 
     const nextStatus = !user.isActive;
 
-    const confirmed = window.confirm(
-      nextStatus
-        ? `آیا از فعال‌سازی حساب ${user.email} مطمئن هستید؟`
-        : `آیا از غیرفعال‌سازی حساب ${user.email} مطمئن هستید؟`,
-    );
+    const confirmed = await confirm({
+      title: nextStatus ? 'فعال‌سازی حساب' : 'غیرفعال‌سازی حساب',
+      message: `${nextStatus ? 'دسترسی' : 'قطع دسترسی'} ${user.email} به سامانه.`,
+      confirmLabel: nextStatus ? 'فعال‌سازی' : 'غیرفعال‌سازی',
+      tone: nextStatus ? 'default' : 'danger',
+    });
 
     if (!confirmed) {
       return;
@@ -586,12 +604,10 @@ export const AdminUsersPage: React.FC<
           : 'حساب کاربر غیرفعال شد.',
       );
     } catch (err) {
-      console.error(err);
+      reportError('AdminUsersPage', err);
 
       setError(
-        err instanceof Error
-          ? err.message
-          : 'تغییر وضعیت کاربر انجام نشد.',
+        getUserMessage(err, 'تغییر وضعیت کاربر انجام نشد.'),
       );
     } finally {
       setStatusUpdatingId(null);
@@ -648,9 +664,12 @@ export const AdminUsersPage: React.FC<
       return;
     }
 
-    const confirmed = window.confirm(
-      `آیا از تعیین رمز موقت جدید برای ${resetTarget.email} مطمئن هستید؟ کاربر پس از ورود مجبور به تغییر رمز خواهد بود.`,
-    );
+    const confirmed = await confirm({
+      title: 'تعیین رمز موقت',
+      message: `کاربر ${resetTarget.email} پس از ورود مجبور به تغییر رمز خواهد بود.`,
+      confirmLabel: 'تعیین رمز',
+      tone: 'danger',
+    });
 
     if (!confirmed) {
       return;
@@ -678,12 +697,10 @@ export const AdminUsersPage: React.FC<
 
       closeResetPassword();
     } catch (err) {
-      console.error(err);
+      reportError('AdminUsersPage', err);
 
       setError(
-        err instanceof Error
-          ? err.message
-          : 'Reset رمز عبور انجام نشد.',
+        getUserMessage(err, 'Reset رمز عبور انجام نشد.'),
       );
     } finally {
       setResettingPassword(false);
@@ -734,12 +751,10 @@ export const AdminUsersPage: React.FC<
 
       setDeleteTarget(null);
     } catch (err) {
-      console.error(err);
+      reportError('AdminUsersPage', err);
 
       setError(
-        err instanceof Error
-          ? err.message
-          : 'حذف کاربر انجام نشد.',
+        getUserMessage(err, 'حذف کاربر انجام نشد.'),
       );
     } finally {
       setDeleting(false);
@@ -801,7 +816,7 @@ export const AdminUsersPage: React.FC<
       </div>
 
       {error && (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-700">
+        <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-700">
           {error}
         </div>
       )}
@@ -1234,8 +1249,13 @@ export const AdminUsersPage: React.FC<
       {creatingUser && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/50 p-4">
           <div
+            ref={createDialogRef}
             dir="rtl"
-            className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-white shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label="ایجاد کاربر جدید"
+            tabIndex={-1}
+            className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-white shadow-2xl outline-none"
           >
             <div className="flex items-center justify-between border-b border-slate-100 p-6">
               <div>
@@ -1260,11 +1280,11 @@ export const AdminUsersPage: React.FC<
 
             <div className="space-y-5 p-6">
               <div>
-                <label className="mb-2 block text-sm font-bold text-slate-700">
+                <label htmlFor="admin-users-field-1" className="mb-2 block text-sm font-bold text-slate-700">
                   ایمیل
                 </label>
 
-                <input
+                <input id="admin-users-field-1"
                   dir="ltr"
                   type="email"
                   autoComplete="off"
@@ -1279,11 +1299,11 @@ export const AdminUsersPage: React.FC<
               </div>
 
               <div>
-                <label className="mb-2 block text-sm font-bold text-slate-700">
+                <label htmlFor="admin-users-field-2" className="mb-2 block text-sm font-bold text-slate-700">
                   نقش کاربر
                 </label>
 
-                <select
+                <select id="admin-users-field-2"
                   value={createRole}
                   onChange={(event) =>
                     handleCreateRoleChange(
@@ -1316,11 +1336,11 @@ export const AdminUsersPage: React.FC<
               {createRole !== 'SUPER_ADMIN' &&
                 createRole !== 'PLATFORM_ADMIN' && (
                   <div>
-                    <label className="mb-2 block text-sm font-bold text-slate-700">
+                    <label htmlFor="admin-users-field-3" className="mb-2 block text-sm font-bold text-slate-700">
                       داروخانه
                     </label>
 
-                    <select
+                    <select id="admin-users-field-3"
                       value={createPharmacyId}
                       onChange={(event) =>
                         setCreatePharmacyId(
@@ -1347,11 +1367,11 @@ export const AdminUsersPage: React.FC<
                 )}
 
               <div>
-                <label className="mb-2 block text-sm font-bold text-slate-700">
+                <label htmlFor="admin-users-field-4" className="mb-2 block text-sm font-bold text-slate-700">
                   رمز موقت
                 </label>
 
-                <input
+                <input id="admin-users-field-4"
                   dir="ltr"
                   type="password"
                   autoComplete="new-password"
@@ -1367,11 +1387,11 @@ export const AdminUsersPage: React.FC<
               </div>
 
               <div>
-                <label className="mb-2 block text-sm font-bold text-slate-700">
+                <label htmlFor="admin-users-field-5" className="mb-2 block text-sm font-bold text-slate-700">
                   تکرار رمز موقت
                 </label>
 
-                <input
+                <input id="admin-users-field-5"
                   dir="ltr"
                   type="password"
                   autoComplete="new-password"
@@ -1419,8 +1439,13 @@ export const AdminUsersPage: React.FC<
       {editingUser && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4">
           <div
+            ref={editDialogRef}
             dir="rtl"
-            className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-white shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label="ویرایش کاربر"
+            tabIndex={-1}
+            className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-white shadow-2xl outline-none"
           >
             <div className="flex items-center justify-between border-b border-slate-100 p-6">
               <div>
@@ -1448,11 +1473,11 @@ export const AdminUsersPage: React.FC<
 
             <div className="space-y-5 p-6">
               <div>
-                <label className="mb-2 block text-sm font-bold text-slate-700">
+                <label htmlFor="admin-users-field-6" className="mb-2 block text-sm font-bold text-slate-700">
                   ایمیل
                 </label>
 
-                <input
+                <input id="admin-users-field-6"
                   dir="ltr"
                   type="email"
                   value={editEmail}
@@ -1467,11 +1492,11 @@ export const AdminUsersPage: React.FC<
               </div>
 
               <div>
-                <label className="mb-2 block text-sm font-bold text-slate-700">
+                <label htmlFor="admin-users-field-7" className="mb-2 block text-sm font-bold text-slate-700">
                   نقش کاربر
                 </label>
 
-                <select
+                <select id="admin-users-field-7"
                   value={editRole}
                   onChange={(event) =>
                     handleRoleChange(
@@ -1511,11 +1536,11 @@ export const AdminUsersPage: React.FC<
               {editRole !== 'SUPER_ADMIN' &&
                 editRole !== 'PLATFORM_ADMIN' && (
                 <div>
-                  <label className="mb-2 block text-sm font-bold text-slate-700">
+                  <label htmlFor="admin-users-field-8" className="mb-2 block text-sm font-bold text-slate-700">
                     داروخانه
                   </label>
 
-                  <select
+                  <select id="admin-users-field-8"
                     value={editPharmacyId}
                     onChange={(event) =>
                       setEditPharmacyId(
@@ -1591,8 +1616,13 @@ export const AdminUsersPage: React.FC<
       {resetTarget && (
         <div className="fixed inset-0 z-[105] flex items-center justify-center bg-slate-950/50 p-4">
           <div
+            ref={resetDialogRef}
             dir="rtl"
-            className="w-full max-w-md rounded-3xl bg-white shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label="تعیین رمز موقت"
+            tabIndex={-1}
+            className="w-full max-w-md rounded-3xl bg-white shadow-2xl outline-none"
           >
             <div className="border-b border-slate-100 p-6">
               <div className="flex items-center gap-3">
@@ -1622,11 +1652,11 @@ export const AdminUsersPage: React.FC<
               </div>
 
               <div>
-                <label className="mb-2 block text-sm font-bold text-slate-700">
+                <label htmlFor="admin-users-field-9" className="mb-2 block text-sm font-bold text-slate-700">
                   رمز عبور جدید
                 </label>
 
-                <input
+                <input id="admin-users-field-9"
                   dir="ltr"
                   type="password"
                   autoComplete="new-password"
@@ -1642,11 +1672,11 @@ export const AdminUsersPage: React.FC<
               </div>
 
               <div>
-                <label className="mb-2 block text-sm font-bold text-slate-700">
+                <label htmlFor="admin-users-field-10" className="mb-2 block text-sm font-bold text-slate-700">
                   تکرار رمز عبور
                 </label>
 
-                <input
+                <input id="admin-users-field-10"
                   dir="ltr"
                   type="password"
                   autoComplete="new-password"
@@ -1694,8 +1724,13 @@ export const AdminUsersPage: React.FC<
       {deleteTarget && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/50 p-4">
           <div
+            ref={deleteDialogRef}
             dir="rtl"
-            className="w-full max-w-md rounded-3xl bg-white shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label="حذف کاربر"
+            tabIndex={-1}
+            className="w-full max-w-md rounded-3xl bg-white shadow-2xl outline-none"
           >
             <div className="p-6">
               <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-100 text-rose-600">

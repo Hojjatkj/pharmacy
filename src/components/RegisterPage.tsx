@@ -1,5 +1,5 @@
 import BrandMark from './BrandMark';
-import React, { FormEvent, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 
 import {
   getActiveUserAgreement,
@@ -7,6 +7,8 @@ import {
   RegisterRequest,
   UserAgreementResponse,
 } from '../api/auth';
+import { getUserMessage } from '../lib/errors';
+import { useDialogBehavior } from '../hooks/useDialogBehavior';
 
 interface RegisterPageProps {
   onBackToLogin: () => void;
@@ -56,6 +58,8 @@ export function RegisterPage({
 
   const agreementScrollRef =
     useRef<HTMLDivElement | null>(null);
+
+  useDialogBehavior(agreementOpen, () => setAgreementOpen(false));
 
   const [showPassword, setShowPassword] =
     useState(false);
@@ -116,9 +120,7 @@ export function RegisterPage({
       setAgreement(data);
     } catch (err) {
       setAgreementError(
-        err instanceof Error
-          ? err.message
-          : 'دریافت توافق‌نامه انجام نشد.',
+        getUserMessage(err, 'دریافت توافق‌نامه انجام نشد.'),
       );
     } finally {
       setAgreementLoading(false);
@@ -193,9 +195,7 @@ export function RegisterPage({
       setSuccess(true);
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'ثبت‌نام انجام نشد. لطفاً اطلاعات واردشده را بررسی کنید.',
+        getUserMessage(err, 'ثبت‌نام انجام نشد. لطفاً اطلاعات واردشده را بررسی کنید.'),
       );
     } finally {
       setLoading(false);
@@ -252,7 +252,13 @@ export function RegisterPage({
           className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/60 p-4"
           dir="rtl"
         >
-          <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={agreement?.title ?? 'توافق‌نامه کاربری'}
+            tabIndex={-1}
+            className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl outline-none"
+          >
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
               <div>
                 <h2 className="text-lg font-black text-slate-900">

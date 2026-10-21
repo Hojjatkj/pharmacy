@@ -1,10 +1,12 @@
 import BrandMark from './BrandMark';
-import React, { FormEvent, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   getActiveUserAgreement,
   registerUser,
   UserAgreementResponse,
 } from '../api/auth';
+import { getUserMessage } from '../lib/errors';
+import { useDialogBehavior } from '../hooks/useDialogBehavior';
 
 type Props = {
   onBackToCatalog: () => void;
@@ -31,6 +33,8 @@ export default function CustomerRegisterPage({
   const [success, setSuccess] = useState(false);
   const agreementScrollRef = useRef<HTMLDivElement>(null);
 
+  useDialogBehavior(agreementOpen, () => setAgreementOpen(false));
+
   useEffect(() => {
     if (!agreementOpen || !agreement || agreementLoading) return;
 
@@ -54,7 +58,7 @@ export default function CustomerRegisterPage({
       setAgreement(result);
     } catch (err) {
       setAgreementError(
-        err instanceof Error ? err.message : 'دریافت توافق‌نامه انجام نشد.',
+        getUserMessage(err, 'دریافت توافق‌نامه انجام نشد.'),
       );
     } finally {
       setAgreementLoading(false);
@@ -95,9 +99,7 @@ export default function CustomerRegisterPage({
       setSuccess(true);
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'ثبت‌نام انجام نشد. لطفاً اطلاعات را بررسی کنید.',
+        getUserMessage(err, 'ثبت‌نام انجام نشد. لطفاً اطلاعات را بررسی کنید.'),
       );
     } finally {
       setLoading(false);
@@ -108,7 +110,13 @@ export default function CustomerRegisterPage({
     <main dir="rtl" className="flex min-h-screen items-center justify-center bg-slate-50 p-4 text-slate-800">
       {agreementOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <section className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={agreement?.title ?? 'توافق‌نامه کاربری'}
+            tabIndex={-1}
+            className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl outline-none"
+          >
             <header className="flex items-center justify-between gap-3 border-b border-slate-200 p-5">
               <div>
                 <h2 className="font-black">{agreement?.title ?? 'توافق‌نامه کاربری'}</h2>

@@ -1,5 +1,5 @@
 import BrandMark from './BrandMark';
-import React, { FormEvent, useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -23,6 +23,8 @@ import {
   PublicStorefrontProduct,
   StorefrontFilters,
 } from '../api/storefront';
+import { getUserMessage } from '../lib/errors';
+import { formatMoney } from '../lib/format';
 
 type Props = {
   onPurchase: () => void;
@@ -71,9 +73,10 @@ export default function PublicProductCatalog({
       setProducts(result);
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'دریافت فهرست محصولات انجام نشد. لطفاً دوباره تلاش کنید.',
+        getUserMessage(
+          err,
+          'دریافت فهرست محصولات انجام نشد. لطفاً دوباره تلاش کنید.',
+        ),
       );
     } finally {
       setLoading(false);
@@ -258,7 +261,8 @@ export default function PublicProductCatalog({
         </form>
 
         {error && (
-          <div role="alert" className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm leading-7 text-red-700">
+          <div
+            role="alert" className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm leading-7 text-red-700">
             <span>{error}</span>
             <button type="button" onClick={() => void loadProducts(filters)} className="rounded-lg border border-red-200 px-3 py-2 font-bold hover:bg-red-100">تلاش دوباره</button>
           </div>
@@ -345,8 +349,7 @@ export default function PublicProductCatalog({
                       <div className="min-w-0">
                         <p className="text-[10px] font-medium text-slate-500">قیمت عرضه</p>
                         <p className="mt-1 whitespace-nowrap text-xl font-black tracking-tight text-emerald-800">
-                          {formatNumber(item.sellingPrice)}
-                          <span className="mr-1 text-[10px] font-bold text-slate-500">تومان</span>
+                          {formatMoney(item.sellingPrice)}
                         </p>
                       </div>
                       <div className="text-left">

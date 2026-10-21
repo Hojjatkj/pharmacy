@@ -1,9 +1,10 @@
-import React, { FormEvent, useState } from 'react';
+import { useState, type FormEvent } from 'react';
 
 import {
   MeResponse,
   updatePassword,
 } from '../api/auth';
+import { getUserMessage } from '../lib/errors';
 
 interface ProfilePageProps {
   user: MeResponse;
@@ -89,9 +90,7 @@ export function ProfilePage({
       setConfirmPassword('');
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'تغییر رمز عبور انجام نشد.',
+        getUserMessage(err, 'تغییر رمز عبور انجام نشد.'),
       );
     } finally {
       setLoading(false);
@@ -165,11 +164,11 @@ export function ProfilePage({
             className="mt-6 space-y-4"
           >
             <div>
-              <label className="mb-2 block text-xs font-bold text-slate-700">
+              <label htmlFor="profile-field-1" className="mb-2 block text-xs font-bold text-slate-700">
                 رمز عبور فعلی
               </label>
 
-              <input
+              <input id="profile-field-1"
                 type="password"
                 value={currentPassword}
                 onChange={(event) =>
@@ -181,11 +180,11 @@ export function ProfilePage({
             </div>
 
             <div>
-              <label className="mb-2 block text-xs font-bold text-slate-700">
+              <label htmlFor="profile-field-2" className="mb-2 block text-xs font-bold text-slate-700">
                 رمز عبور جدید
               </label>
 
-              <input
+              <input id="profile-field-2"
                 type="password"
                 value={newPassword}
                 onChange={(event) =>
@@ -197,11 +196,11 @@ export function ProfilePage({
             </div>
 
             <div>
-              <label className="mb-2 block text-xs font-bold text-slate-700">
+              <label htmlFor="profile-field-3" className="mb-2 block text-xs font-bold text-slate-700">
                 تکرار رمز عبور جدید
               </label>
 
-              <input
+              <input id="profile-field-3"
                 type="password"
                 value={confirmPassword}
                 onChange={(event) =>
@@ -213,13 +212,13 @@ export function ProfilePage({
             </div>
 
             {error && (
-              <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+              <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
                 {error}
               </div>
             )}
 
             {message && (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+              <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
                 {message}
               </div>
             )}

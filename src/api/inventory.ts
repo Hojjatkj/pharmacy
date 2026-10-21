@@ -1,4 +1,4 @@
-import { apiRequest } from './client';
+import { apiRequest, apiRequestBlob } from './client';
 import { PharmacyStockItem } from '../types';
 
 export interface CreateStockItemPayload {
@@ -108,42 +108,5 @@ export async function importInventoryExcel(
 }
 
 export async function downloadInventoryImportTemplate(): Promise<Blob> {
-  const token = localStorage.getItem('accessToken');
-
-  const response = await fetch(
-    `${getInventoryApiBaseUrl()}/inventory/import/template`,
-    {
-      headers: token
-        ? {
-            Authorization: `Bearer ${token}`,
-          }
-        : undefined,
-    },
-  );
-
-  if (!response.ok) {
-    const contentType =
-      response.headers.get('content-type') ?? '';
-
-    let message = `Request failed with status ${response.status}`;
-
-    if (contentType.includes('application/json')) {
-      const data = (await response.json()) as {
-        message?: unknown;
-      };
-
-      if (data.message) {
-        message = String(data.message);
-      }
-    }
-
-    throw new Error(message);
-  }
-
-  return response.blob();
-}
-
-function getInventoryApiBaseUrl(): string {
-  return import.meta.env.VITE_API_BASE_URL ??
-    'http://localhost:3001/api/v1';
+  return apiRequestBlob('/inventory/import/template');
 }

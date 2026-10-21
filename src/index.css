@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* Self-hosted so the UI does not depend on a blocked/slow third-party CDN
+   (Google Fonts is frequently unavailable inside Iran). */
+@font-face {
+  font-family: "Vazirmatn";
+  src: url("/fonts/vazirmatn-variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+
 @theme {
   /* Medical Teal */
   --color-medical-50: #effafb;

@@ -1,252 +1,314 @@
-import React, { useState } from 'react';
-import { B2BExchangeMatch, EscrowTransaction } from '../types';
-import { 
-  ShieldCheck, 
-  Lock, 
-  Truck, 
-  CheckCircle2, 
-  CreditCard, 
-  ArrowRight, 
-  AlertCircle, 
-  Building, 
+import { useState } from 'react';
+import {
+  ArrowRight,
+  CheckCircle2,
+  CreditCard,
+  KeyRound,
+  Lock,
   QrCode,
-  Sparkles,
-  DollarSign,
-  KeyRound
+  ShieldCheck,
+  Truck,
 } from 'lucide-react';
+import { DemoNotice } from './DemoNotice';
+import { formatMoney } from '../lib/format';
 
 interface EscrowPaymentSimulatorProps {
-  selectedMatch: B2BExchangeMatch | null;
+  onBack: () => void;
 }
 
-export const EscrowPaymentSimulator: React.FC<EscrowPaymentSimulatorProps> = ({
-  selectedMatch
-}) => {
-  // Mock transaction based on selected match or default
-  const defaultTotal = selectedMatch ? selectedMatch.recommendedTransferQty * selectedMatch.aiSuggestedPrice : 49725000;
-  const platformFee = Math.round(defaultTotal * 0.025); // 2.5% platform fee
-  const logisticsFee = 250000; // Flat courier shipping
-  const sellerPayout = defaultTotal - platformFee;
+/**
+ * Demonstration-only walkthrough of the escrow lifecycle.
+ *
+ * It deliberately contains no real payment, OTP or settlement integration.
+ * A production escrow flow must run through a licensed PSP/bank partner and
+ * its state must come from the backend, never from client-side steps.
+ */
+const DEMO_INVOICE_TOTAL = 49_725_000; // Rial
+const PLATFORM_FEE_RATE = 0.025;
+const LOGISTICS_FEE = 250_000; // Rial
 
-  const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(2);
-  const [otpInput, setOtpInput] = useState('734912');
-  const [isOtpVerified, setIsOtpVerified] = useState(false);
+type Step = 1 | 2 | 3 | 4;
+
+const STEPS: Array<{
+  step: Step;
+  title: string;
+  description: string;
+  icon: typeof CreditCard;
+}> = [
+  {
+    step: 1,
+    title: 'واریز به حساب امانی',
+    description: 'تأیید پیش‌فاکتور و مسدودی وجه در حساب واسط',
+    icon: CreditCard,
+  },
+  {
+    step: 2,
+    title: 'ارسال با پلمپ و رهگیری',
+    description: 'تحویل به ناوگان حمل تخصصی همراه با بارنامه',
+    icon: Truck,
+  },
+  {
+    step: 3,
+    title: 'بازرسی و تأیید اصالت',
+    description: 'بررسی فیزیکی بچ و ثبت تأیید مسئول فنی',
+    icon: QrCode,
+  },
+  {
+    step: 4,
+    title: 'تسهیم و تسویه',
+    description: 'آزادسازی وجه برای فروشنده و کسر کارمزد پلتفرم',
+    icon: CheckCircle2,
+  },
+];
+
+export function EscrowPaymentSimulator({ onBack }: EscrowPaymentSimulatorProps) {
+  const platformFee = Math.round(DEMO_INVOICE_TOTAL * PLATFORM_FEE_RATE);
+  const sellerPayout = DEMO_INVOICE_TOTAL - platformFee;
+
+  const [currentStep, setCurrentStep] = useState<Step>(2);
+  const [otpInput, setOtpInput] = useState('');
 
   const handleAdvanceStep = () => {
-    if (currentStep < 4) {
-      setCurrentStep((prev) => (prev + 1) as any);
-    }
+    setCurrentStep((previous) => (previous < 4 ? ((previous + 1) as Step) : previous));
   };
 
   const handleVerifyOtp = () => {
-    setIsOtpVerified(true);
+    if (otpInput.trim().length < 6) return;
     setCurrentStep(4);
   };
 
   return (
-    <div className="space-y-6 pb-12" id="escrow-payment-view">
-      
-      {/* Header Info */}
-      <div className="bg-slate-900 text-white rounded-2xl p-6 border border-slate-800 shadow-lg">
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-semibold border border-emerald-500/30">
-              <Lock className="w-3 h-3" />
-              <span>پروتکل تسویه امانی شاپرک (Shaparak Escrow Architecture)</span>
+    <div dir="rtl" className="space-y-6 pb-12" id="escrow-payment-view">
+      <DemoNotice>
+        این صفحه فقط چرخه پیشنهادی پرداخت امانی را نمایش می‌دهد. هیچ پرداخت، کد پیامکی یا
+        تسویه واقعی انجام نمی‌شود و ارقام نمونه هستند.
+      </DemoNotice>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-white shadow-lg">
+        <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
+          <div className="space-y-2">
+            <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/20 px-2.5 py-1 text-xs font-semibold text-emerald-300">
+              <Lock className="h-3 w-3" aria-hidden="true" />
+              <span>پیش‌نمایش چرخه پرداخت امانی</span>
             </div>
-            <h2 className="text-xl font-black">درگاه پرداخت امن و سیستم امانی تبادل کالا</h2>
-            <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-              وجه تراکنش تا زمان رسیدن فیزیکی محموله و تطبیق اصالت توسط داروساز مسئول فنی در حساب واسط امانی مسدود می‌ماند. پس از تایید نهایی، تسویه هوشمند شبا انجام می‌شود.
+
+            <h1 className="text-xl font-black">تبادل امن کالا بین داروخانه‌ها</h1>
+
+            <p className="max-w-2xl text-xs leading-6 text-slate-300">
+              در نسخه نهایی، وجه تا تأیید دریافت و اصالت محموله نزد نهاد مجاز نگهداری و سپس
+              تسویه می‌شود. پیاده‌سازی واقعی نیازمند قرارداد با درگاه پرداخت و نهاد امانی دارای
+              مجوز است.
             </p>
+
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-bold text-slate-200 transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400"
+            >
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              بازگشت به تبادل B2B
+            </button>
           </div>
 
-          <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 text-left min-w-[220px]">
-            <span className="text-[11px] text-slate-400 block">ارزش کل فاکتور در گردش:</span>
-            <div className="text-xl font-black text-emerald-400 font-mono">
-              {defaultTotal.toLocaleString('fa-IR')} <span className="text-xs text-slate-300 font-sans font-normal">تومان</span>
+          <div className="min-w-[220px] rounded-xl border border-slate-700 bg-slate-800 p-4 text-left">
+            <span className="block text-[11px] text-slate-400">مبلغ نمونه فاکتور:</span>
+
+            <div className="mt-1 font-mono text-lg font-black text-emerald-400">
+              {formatMoney(DEMO_INVOICE_TOTAL)}
             </div>
-            <span className="text-[10px] text-emerald-300 block mt-1">تضمین شده توسط پروتکل چندامضایی</span>
+
+            <span className="mt-1 block text-[10px] text-slate-400">
+              رقم ساختگی برای نمایش رابط کاربری
+            </span>
           </div>
         </div>
       </div>
 
-      {/* 4-Step Interactive Pipeline */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-6">
-        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-          <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-emerald-600" />
-            <span>چرخه حیات تراکنش امانی (Escrow Lifecycle Pipeline)</span>
-          </h3>
-          <span className="text-xs font-semibold text-slate-500">
-            مرحله فعلی: {currentStep} از ۴
+      <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-2 border-b border-slate-100 pb-3 sm:flex-row sm:items-center sm:justify-between">
+          <h2 className="flex items-center gap-2 text-sm font-extrabold text-slate-900">
+            <ShieldCheck className="h-4 w-4 text-emerald-600" aria-hidden="true" />
+            چرخه پیشنهادی تراکنش امانی
+          </h2>
+
+          <span className="text-xs font-semibold text-slate-500" aria-live="polite">
+            مرحله {currentStep} از ۴
           </span>
         </div>
 
-        {/* Visual Stepper */}
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-          {[
-            { step: 1, title: 'واریز به حساب امانی', desc: 'تایید پیش‌فاکتور توسط خریدار و مسدودی وجه در شاپرک', icon: CreditCard },
-            { step: 2, title: 'ارسال با پلمپ و رهگیری', desc: 'تحویل به ناوگان حمل تخصصی دارویی همراه با بارنامه', icon: Truck },
-            { step: 3, title: 'اسکن IRC و احراز OTP', desc: 'بازرسی فیزیکی، استعلام سلامت و صدور کد تایید', icon: QrCode },
-            { step: 4, title: 'تسهیم آنی شبا (Split)', desc: 'آزادسازی وجه به حساب فروشنده و کارمزد پلتفرم', icon: CheckCircle2 },
-          ].map((s) => {
-            const Icon = s.icon;
-            const isDone = currentStep > s.step;
-            const isCurrent = currentStep === s.step;
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+          {STEPS.map((item) => {
+            const Icon = item.icon;
+            const isDone = currentStep > item.step;
+            const isCurrent = currentStep === item.step;
 
             return (
-              <div
-                key={s.step}
-                onClick={() => setCurrentStep(s.step as any)}
-                className={`p-4 rounded-xl border text-xs cursor-pointer transition-all ${
+              <button
+                key={item.step}
+                type="button"
+                onClick={() => setCurrentStep(item.step)}
+                aria-current={isCurrent ? 'step' : undefined}
+                className={`rounded-xl border p-4 text-right text-xs transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-medical-500 ${
                   isCurrent
                     ? 'border-emerald-500 bg-emerald-50/50 shadow-sm ring-2 ring-emerald-500/20'
                     : isDone
-                    ? 'border-slate-200 bg-slate-50'
-                    : 'border-slate-100 bg-white opacity-60'
+                      ? 'border-slate-200 bg-slate-50'
+                      : 'border-slate-100 bg-white opacity-70'
                 }`}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <span className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs ${
-                    isDone 
-                      ? 'bg-medical-600 text-white'
-                      : isCurrent 
-                      ? 'bg-slate-900 text-white' 
-                      : 'bg-slate-200 text-slate-600'
-                  }`}>
-                    {isDone ? '✓' : s.step}
+                <div className="mb-2 flex items-center justify-between">
+                  <span
+                    className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${
+                      isDone
+                        ? 'bg-medical-600 text-white'
+                        : isCurrent
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {isDone ? '✓' : item.step}
                   </span>
-                  <Icon className={`w-4 h-4 ${isCurrent ? 'text-emerald-600' : 'text-slate-400'}`} />
+
+                  <Icon
+                    className={`h-4 w-4 ${isCurrent ? 'text-emerald-600' : 'text-slate-400'}`}
+                    aria-hidden="true"
+                  />
                 </div>
-                <div className="font-bold text-slate-900 mb-1">{s.title}</div>
-                <p className="text-[11px] text-slate-500 leading-normal">{s.desc}</p>
-              </div>
+
+                <div className="mb-1 font-bold text-slate-900">{item.title}</div>
+
+                <p className="text-[11px] leading-normal text-slate-500">{item.description}</p>
+              </button>
             );
           })}
         </div>
 
-        {/* Interactive Step Content Area */}
-        <div className="bg-slate-50 rounded-xl p-5 border border-slate-200 space-y-4">
-          
-          {/* Step 1 Details */}
+        <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-5">
           {currentStep === 1 && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-bold text-slate-800">وضعیت: انتظار برای پرداخت خریدار</span>
-                <span className="text-amber-700 bg-amber-100 px-2 py-0.5 rounded font-mono">شناسه پرداخت: SHP-98412093</span>
-              </div>
-              <p className="text-xs text-slate-600">
-                داروخانه خریدار به درگاه امن متصل می‌شود. وجه در شبستان امن واسط بانک مرکزی ثبت شده و فروشنده اجازه ارسال بار را دریافت می‌کند.
+              <p className="text-xs font-bold text-slate-800">
+                وضعیت: انتظار برای تأیید پیش‌فاکتور توسط خریدار
               </p>
-              <button 
+
+              <p className="text-xs leading-6 text-slate-600">
+                در پیاده‌سازی واقعی، خریدار به درگاه پرداخت منتقل می‌شود و تأیید تراکنش از سمت
+                سرور و درگاه دریافت می‌شود.
+              </p>
+
+              <button
+                type="button"
                 onClick={handleAdvanceStep}
-                className="px-4 py-2 bg-medical-600 hover:bg-medical-700 text-white rounded-lg text-xs font-bold shadow"
+                className="rounded-lg bg-medical-600 px-4 py-2 text-xs font-bold text-white shadow transition hover:bg-medical-700"
               >
-                شبیه‌سازی واریز موفق به حساب امانی
+                نمایش مرحله بعد (شبیه‌سازی)
               </button>
             </div>
           )}
 
-          {/* Step 2 Details */}
           {currentStep === 2 && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-bold text-slate-800">وضعیت: کالا در مسیر تحویل فیزیکی است</span>
-                <span className="text-blue-700 bg-blue-100 px-2 py-0.5 rounded font-mono">کد رهگیری پست/پیک: TRK-140288</span>
-              </div>
-              <p className="text-xs text-slate-600">
-                محموله مکمل‌ها با رعایت زنجیره دما و پلمپ امن تحویل سفیر لجستیک شده است. داروخانه خریدار می‌تواند لحظه‌ای موقعیت را رصد کند.
+              <p className="text-xs font-bold text-slate-800">
+                وضعیت: کالا در مسیر تحویل فیزیکی است
               </p>
-              <button 
+
+              <p className="text-xs leading-6 text-slate-600">
+                کد رهگیری و وضعیت حمل باید از سرویس لجستیک خوانده شود؛ این صفحه هیچ داده‌ای ثبت
+                نمی‌کند.
+              </p>
+
+              <button
+                type="button"
                 onClick={handleAdvanceStep}
-                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold shadow"
+                className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white shadow transition hover:bg-slate-800"
               >
-                اعلام رسیدن بار به داروخانه مقصد
+                اعلام رسیدن بار (شبیه‌سازی)
               </button>
             </div>
           )}
 
-          {/* Step 3 Details */}
           {currentStep === 3 && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-bold text-slate-800">مرحله حیاتی: بازرسی سلامت فیزیکی و اسکن کد IRC</span>
-                <span className="text-purple-700 bg-purple-100 px-2 py-0.5 rounded">نیاز به تایید مسئول فنی</span>
-              </div>
-              <p className="text-xs text-slate-600">
-                دکتر مسئول فنی داروخانه مقصد بارکد جعبه‌ها را بررسی نموده و کد تایید یکبار مصرف پیامک‌شده به شماره نظام پزشکی را وارد می‌نماید:
+              <p className="text-xs font-bold text-slate-800">
+                مرحله بازرسی سلامت فیزیکی و تأیید مسئول فنی
               </p>
-              
-              <div className="flex items-center gap-3 max-w-sm pt-1">
+
+              <p className="text-xs leading-6 text-slate-600">
+                در نسخه واقعی، کد تأیید یک‌بارمصرف از سمت سرور ارسال و اعتبارسنجی می‌شود. در این
+                شبیه‌ساز هر ۶ رقم پذیرفته می‌شود.
+              </p>
+
+              <div className="flex max-w-sm flex-col gap-2 pt-1 sm:flex-row sm:items-center">
                 <div className="relative flex-1">
-                  <KeyRound className="w-4 h-4 absolute right-3 top-2.5 text-slate-400" />
+                  <KeyRound
+                    className="absolute right-3 top-2.5 h-4 w-4 text-slate-400"
+                    aria-hidden="true"
+                  />
+
                   <input
                     type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
                     value={otpInput}
-                    onChange={(e) => setOtpInput(e.target.value)}
-                    placeholder="کد ۶ رقمی OTP"
-                    className="w-full pl-3 pr-9 py-2 bg-white border border-slate-300 rounded-lg font-mono text-center font-bold text-slate-900 tracking-widest text-sm focus:ring-2 focus:ring-medical-500"
+                    onChange={(event) => setOtpInput(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="کد ۶ رقمی نمونه"
+                    aria-label="کد تأیید نمونه"
+                    className="w-full rounded-lg border border-slate-300 bg-white py-2 pl-3 pr-9 text-center font-mono text-sm font-bold tracking-widest text-slate-900 focus:ring-2 focus:ring-medical-500"
                   />
                 </div>
+
                 <button
+                  type="button"
                   onClick={handleVerifyOtp}
-                  className="px-4 py-2 bg-medical-600 hover:bg-medical-700 text-white text-xs font-bold rounded-lg shadow whitespace-nowrap"
+                  disabled={otpInput.length < 6}
+                  className="whitespace-nowrap rounded-lg bg-medical-600 px-4 py-2 text-xs font-bold text-white shadow transition hover:bg-medical-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  تایید اصالت کالا و صدور حواله
+                  تأیید نمونه
                 </button>
               </div>
             </div>
           )}
 
-          {/* Step 4 Details */}
           {currentStep === 4 && (
             <div className="space-y-4">
-              <div className="flex items-center gap-2 text-emerald-800 font-extrabold text-sm">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-                <span>تراکنش با موفقیت تسویه و تسهیم شد!</span>
+              <div className="flex items-center gap-2 text-sm font-extrabold text-emerald-800">
+                <CheckCircle2 className="h-5 w-5 text-emerald-600" aria-hidden="true" />
+                <span>نمایش تسویه و تسهیم (بدون تراکنش واقعی)</span>
               </div>
-              <p className="text-xs text-slate-600">
-                سیستم با بهره‌گیری از API تسهیم هوشمند (Split Payment)، وجه امانی را تفکیک و به مقاصد بانکی واریز نمود:
-              </p>
 
-              {/* Split Breakdown */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="p-3 bg-white rounded-lg border border-slate-200">
-                  <span className="text-[11px] text-slate-400 block">واریز خالص به شبای فروشنده:</span>
-                  <span className="text-sm font-black text-slate-900 font-mono mt-0.5 block">
-                    {sellerPayout.toLocaleString('fa-IR')} تومان
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <span className="block text-[11px] text-slate-400">سهم فروشنده:</span>
+                  <span className="mt-0.5 block font-mono text-sm font-black text-slate-900">
+                    {formatMoney(sellerPayout)}
                   </span>
-                  <span className="text-[10px] text-slate-500 font-mono">IR980170000000123456789001</span>
                 </div>
 
-                <div className="p-3 bg-white rounded-lg border border-slate-200">
-                  <span className="text-[11px] text-slate-400 block">کارمزد پلتفرم (۲.۵٪):</span>
-                  <span className="text-sm font-black text-emerald-700 font-mono mt-0.5 block">
-                    {platformFee.toLocaleString('fa-IR')} تومان
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <span className="block text-[11px] text-slate-400">کارمزد پلتفرم (۲.۵٪):</span>
+                  <span className="mt-0.5 block font-mono text-sm font-black text-emerald-700">
+                    {formatMoney(platformFee)}
                   </span>
-                  <span className="text-[10px] text-slate-500">سرویس مچینگ و انبارداری</span>
                 </div>
 
-                <div className="p-3 bg-white rounded-lg border border-slate-200">
-                  <span className="text-[11px] text-slate-400 block">هزینه لجستیک و بیمه حمل:</span>
-                  <span className="text-sm font-black text-blue-700 font-mono mt-0.5 block">
-                    {logisticsFee.toLocaleString('fa-IR')} تومان
+                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                  <span className="block text-[11px] text-slate-400">هزینه لجستیک نمونه:</span>
+                  <span className="mt-0.5 block font-mono text-sm font-black text-blue-700">
+                    {formatMoney(LOGISTICS_FEE)}
                   </span>
-                  <span className="text-[10px] text-slate-500">ناوگان دارویی امین</span>
                 </div>
               </div>
 
               <button
+                type="button"
                 onClick={() => setCurrentStep(1)}
-                className="text-xs font-semibold text-slate-600 hover:text-slate-900 underline"
+                className="text-xs font-semibold text-slate-600 underline hover:text-slate-900"
               >
-                اجرای مجدد شبیه‌ساز چرخه پرداخت
+                اجرای مجدد شبیه‌ساز
               </button>
             </div>
           )}
-
         </div>
       </div>
     </div>
   );
-};
+}

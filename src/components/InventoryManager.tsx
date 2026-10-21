@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDownUp,
   Boxes,
-  CalendarClock,
   Check,
+  ChevronLeft,
+  ChevronRight,
   CircleDollarSign,
   Download,
   FileSpreadsheet,
@@ -27,6 +28,10 @@ import {
 } from '../types';
 
 import { MeResponse } from '../api/auth';
+import { getUserMessage } from '../lib/errors';
+import { formatMoney } from '../lib/format';
+import { useConfirm } from '../hooks/useConfirm';
+import { useDialogBehavior } from '../hooks/useDialogBehavior';
 
 import {
   createInventoryItem,
@@ -47,7 +52,7 @@ interface InventoryManagerProps {
   onAddStockItem: (item: PharmacyStockItem) => void;
   onUpdateStockItem: (item: PharmacyStockItem) => void;
   onDeleteStockItem: (id: string) => void;
-  onPushToExchange: (item: PharmacyStockItem) => void;
+  onPushToExchange: (item: PharmacyStockItem) => Promise<void>;
   onPharmacyChange: (pharmacy: Pharmacy) => void;
   onRefreshInventory: (
     pharmacyId?: string,
@@ -274,6 +279,9 @@ export const InventoryManager: React.FC<
   onPharmacyChange,
   onRefreshInventory,
 }) => {
+  const confirm = useConfirm();
+  const modalRef = useRef<HTMLDivElement>(null);
+
   const canManageInventory =
     currentUser.role === 'SUPER_ADMIN' ||
     currentUser.role === 'PHARMACY_OWNER';
@@ -324,6 +332,11 @@ export const InventoryManager: React.FC<
 
   const [pushedId, setPushedId] =
     useState<string | null>(null);
+
+  const [pushingId, setPushingId] =
+    useState<string | null>(null);
+
+  const [page, setPage] = useState(1);
 
   const [importingExcel, setImportingExcel] =
     useState(false);
@@ -393,8 +406,10 @@ export const InventoryManager: React.FC<
     };
   }, [stockItems]);
 
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+
   const filteredItems = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
+    const query = deferredSearchQuery.trim().toLowerCase();
 
     const result = stockItems.filter((item) => {
       const available = Math.max(
@@ -532,7 +547,31 @@ export const InventoryManager: React.FC<
     return result;
   }, [
     stockItems,
-    searchQuery,
+    deferredSearchQuery,
+    filterRisk,
+    filterCategory,
+    filterStock,
+    filterExpiry,
+    sortField,
+    sortDirection,
+  ]);
+
+  const PAGE_SIZE = 50;
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pagedItems = useMemo(
+    () =>
+      filteredItems.slice(
+        (safePage - 1) * PAGE_SIZE,
+        safePage * PAGE_SIZE,
+      ),
+    [filteredItems, safePage],
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [
+    deferredSearchQuery,
     filterRisk,
     filterCategory,
     filterStock,
@@ -554,12 +593,6 @@ export const InventoryManager: React.FC<
     otc_health: 'OTC / سلامت',
     sports_nutrition: 'تغذیه ورزشی',
   };
-
-  function formatMoney(value: number) {
-    return new Intl.NumberFormat('fa-IR').format(
-      Math.round(value),
-    );
-  }
 
   function resetInventoryFilters() {
     setSearchQuery('');
@@ -630,6 +663,8 @@ export const InventoryManager: React.FC<
     setEditingItem(null);
     setError(null);
   }
+
+  useDialogBehavior(showModal, closeModal, modalRef);
 
   function updateForm(
     patch: Partial<FormState>,
@@ -753,11 +788,12 @@ export const InventoryManager: React.FC<
       resetForm();
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : editingItem
+        getUserMessage(
+          err,
+          editingItem
             ? 'ویرایش موجودی انجام نشد.'
             : 'ثبت موجودی انجام نشد.',
+        ),
       );
     } finally {
       setSaving(false);
@@ -769,9 +805,12 @@ export const InventoryManager: React.FC<
   ) {
     if (!canManageInventory) return;
 
-    const confirmed = window.confirm(
-      `آیا از حذف موجودی «${item.product.name}» با بچ ${item.batchNumber} مطمئن هستید؟`,
-    );
+    const confirmed = await confirm({
+      title: 'حذف موجودی',
+      message: `موجودی «${item.product.name}» با بچ ${item.batchNumber} حذف می‌شود. این عملیات قابل بازگشت نیست.`,
+      confirmLabel: 'حذف',
+      tone: 'danger',
+    });
 
     if (!confirmed) return;
 
@@ -789,9 +828,7 @@ export const InventoryManager: React.FC<
       );
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'حذف موجودی انجام نشد.',
+        getUserMessage(err, 'حذف موجودی انجام نشد.'),
       );
     } finally {
       setDeletingId(null);
@@ -828,9 +865,7 @@ export const InventoryManager: React.FC<
       );
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'دانلود نمونه Excel انجام نشد.',
+        getUserMessage(err, 'دانلود نمونه Excel انجام نشد.'),
       );
     } finally {
       setDownloadingTemplate(false);
@@ -889,9 +924,7 @@ export const InventoryManager: React.FC<
       );
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'Import فایل Excel انجام نشد.',
+        getUserMessage(err, 'Import فایل Excel انجام نشد.'),
       );
 
       setImportInputKey(
@@ -902,15 +935,31 @@ export const InventoryManager: React.FC<
     }
   }
 
-  function handlePush(
-    item: PharmacyStockItem,
-  ) {
-    onPushToExchange(item);
-    setPushedId(item.id);
+  async function handlePush(item: PharmacyStockItem) {
+    if (pushingId) return;
 
-    window.setTimeout(() => {
-      setPushedId(null);
-    }, 2500);
+    setPushingId(item.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await onPushToExchange(item);
+
+      setPushedId(item.id);
+      setSuccess(
+        'پیشنهاد فروش این بچ در بازار تبادل B2B ثبت شد.',
+      );
+
+      window.setTimeout(() => {
+        setPushedId(null);
+      }, 2500);
+    } catch (err) {
+      setError(
+        getUserMessage(err, 'ثبت پیشنهاد در بازار تبادل انجام نشد.'),
+      );
+    } finally {
+      setPushingId(null);
+    }
   }
 
   return (
@@ -1039,7 +1088,7 @@ export const InventoryManager: React.FC<
       )}
 
       {error && !showModal && (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-bold text-rose-700">
+        <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-bold text-rose-700">
           {error}
         </div>
       )}
@@ -1105,7 +1154,6 @@ export const InventoryManager: React.FC<
             inventoryMetrics.inventoryValue,
           )}
           tone="emerald"
-          suffix=" ریال"
         />
       </div>
 
@@ -1367,7 +1415,7 @@ export const InventoryManager: React.FC<
             </thead>
 
             <tbody className="divide-y divide-slate-100">
-              {filteredItems.map((item) => {
+              {pagedItems.map((item) => {
                 const available = Math.max(
                   0,
                   item.currentStock -
@@ -1514,10 +1562,6 @@ export const InventoryManager: React.FC<
                           inventoryValue,
                         )}
                       </div>
-
-                      <div className="text-[10px] text-slate-400">
-                        ریال
-                      </div>
                     </td>
 
                     <td className="px-3 py-3">
@@ -1585,15 +1629,17 @@ export const InventoryManager: React.FC<
                         {(isCritical || isWarning) && (
                           <button
                             type="button"
-                            onClick={() =>
-                              handlePush(item)
-                            }
-                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-bold text-emerald-700 transition hover:bg-emerald-100"
+                            onClick={() => void handlePush(item)}
+                            disabled={pushingId === item.id}
+                            aria-busy={pushingId === item.id}
+                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-60"
                           >
-                            <Sparkles className="h-3 w-3" />
-                            {pushedId === item.id
-                              ? 'ارسال شد'
-                              : 'B2B'}
+                            <Sparkles className="h-3 w-3" aria-hidden="true" />
+                            {pushingId === item.id
+                              ? 'در حال ثبت...'
+                              : pushedId === item.id
+                                ? 'ثبت شد'
+                                : 'عرضه در B2B'}
                           </button>
                         )}
                       </div>
@@ -1636,23 +1682,52 @@ export const InventoryManager: React.FC<
           </table>
         </div>
 
-        <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 px-4 py-3 text-[10px] text-slate-400 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50 px-4 py-3 text-[11px] text-slate-500 sm:flex-row sm:items-center sm:justify-between">
           <span>
-            داده‌ها مستقیماً از موجودی Backend داروخانه
-            خوانده می‌شوند.
+            نمایش {formatMoney((safePage - 1) * PAGE_SIZE + 1)} تا{' '}
+            {formatMoney(Math.min(safePage * PAGE_SIZE, filteredItems.length))} از{' '}
+            {formatMoney(filteredItems.length)} قلم
           </span>
 
-          <span className="inline-flex items-center gap-1 font-bold text-emerald-700">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            LIVE
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              disabled={safePage <= 1}
+              aria-label="صفحه قبلی"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
+            >
+              <ChevronRight className="h-4 w-4" aria-hidden="true" />
+            </button>
+
+            <span aria-live="polite">
+              صفحه {formatMoney(safePage)} از {formatMoney(totalPages)}
+            </span>
+
+            <button
+              type="button"
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              disabled={safePage >= totalPages}
+              aria-label="صفحه بعدی"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 disabled:opacity-40"
+            >
+              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Create / Edit Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+          <div
+            ref={modalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={editingItem ? 'ویرایش موجودی' : 'ثبت موجودی جدید'}
+            tabIndex={-1}
+            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl outline-none"
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-base font-black text-slate-900">
@@ -1681,18 +1756,18 @@ export const InventoryManager: React.FC<
               className="mt-5 space-y-4"
             >
               {error && (
-                <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-bold text-rose-700">
+                <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-bold text-rose-700">
                   {error}
                 </div>
               )}
 
               {canSelectPharmacy && (
                 <div>
-                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                  <label htmlFor="inventory-field-1" className="mb-2 block text-xs font-bold text-slate-700">
                     داروخانه مقصد
                   </label>
 
-                  <select
+                  <select id="inventory-field-1"
                     value={activePharmacy.id}
                     onChange={(event) => {
                       const pharmacy =
@@ -1734,11 +1809,11 @@ export const InventoryManager: React.FC<
               )}
 
               <div>
-                <label className="mb-2 block text-xs font-bold text-slate-700">
+                <label htmlFor="inventory-field-2" className="mb-2 block text-xs font-bold text-slate-700">
                   محصول
                 </label>
 
-                <select
+                <select id="inventory-field-2"
                   value={form.productId}
                   onChange={(event) => {
                     const product =
@@ -1778,11 +1853,11 @@ export const InventoryManager: React.FC<
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                  <label htmlFor="inventory-field-3" className="mb-2 block text-xs font-bold text-slate-700">
                     شماره بچ
                   </label>
 
-                  <input
+                  <input id="inventory-field-3"
                     value={
                       form.batchNumber
                     }
@@ -1799,11 +1874,11 @@ export const InventoryManager: React.FC<
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                  <label htmlFor="inventory-field-4" className="mb-2 block text-xs font-bold text-slate-700">
                     تاریخ انقضا
                   </label>
 
-                  <input
+                  <input id="inventory-field-4"
                     type="date"
                     value={
                       form.expiryDate
@@ -1822,11 +1897,11 @@ export const InventoryManager: React.FC<
 
               <div className="grid gap-4 sm:grid-cols-3">
                 <div>
-                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                  <label htmlFor="inventory-field-5" className="mb-2 block text-xs font-bold text-slate-700">
                     موجودی
                   </label>
 
-                  <input
+                  <input id="inventory-field-5"
                     type="number"
                     min="0"
                     value={
@@ -1847,11 +1922,11 @@ export const InventoryManager: React.FC<
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                  <label htmlFor="inventory-field-6" className="mb-2 block text-xs font-bold text-slate-700">
                     فروش روزانه
                   </label>
 
-                  <input
+                  <input id="inventory-field-6"
                     type="number"
                     min="0"
                     step="0.1"
@@ -1874,11 +1949,11 @@ export const InventoryManager: React.FC<
 
               <div className="grid gap-4 sm:grid-cols-3">
                 <div>
-                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                  <label htmlFor="inventory-field-7" className="mb-2 block text-xs font-bold text-slate-700">
                     قیمت خرید
                   </label>
 
-                  <input
+                  <input id="inventory-field-7"
                     type="number"
                     min="0"
                     value={
@@ -1899,11 +1974,11 @@ export const InventoryManager: React.FC<
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                  <label htmlFor="inventory-field-8" className="mb-2 block text-xs font-bold text-slate-700">
                     قیمت فروش
                   </label>
 
-                  <input
+                  <input id="inventory-field-8"
                     type="number"
                     min="0"
                     value={
@@ -1924,11 +1999,11 @@ export const InventoryManager: React.FC<
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                  <label htmlFor="inventory-field-9" className="mb-2 block text-xs font-bold text-slate-700">
                     حداقل قیمت B2B
                   </label>
 
-                  <input
+                  <input id="inventory-field-9"
                     type="number"
                     min="0"
                     value={

@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import {
   getStorefrontProducts,
   StorefrontProduct,
+  StorefrontFilters,
 } from '../api/storefront';
 import { updatePassword } from '../api/auth';
+import { formatDate, formatMoney, formatNumber } from '../lib/format';
+import { useDialogBehavior } from '../hooks/useDialogBehavior';
+import { useConfirm } from '../hooks/useConfirm';
 import {
   createShippingAddress,
   deleteShippingAddress,
@@ -29,6 +33,8 @@ import {
   CouponPreview,
   CustomerNotification,
 } from '../api/cart';
+import { getUserMessage } from '../lib/errors';
+import { reportError } from '../lib/telemetry';
 
 type Props = {
   onLogout: () => void;
@@ -40,18 +46,6 @@ const categoryLabels: Record<string, string> = {
   otc_health: 'سلامت و بدون نسخه',
   sports_nutrition: 'تغذیه ورزشی',
 };
-
-function formatPrice(value: number) {
-  return new Intl.NumberFormat('fa-IR').format(value);
-}
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('fa-IR', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date(value));
-}
 
 export default function CustomerStorefront({ onLogout }: Props) {
   const [products, setProducts] = useState<StorefrontProduct[]>([]);
@@ -101,6 +95,18 @@ export default function CustomerStorefront({ onLogout }: Props) {
   const [ordersError, setOrdersError] = useState('');
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [showProfile, setShowProfile] = useState(false);
+
+  const confirm = useConfirm();
+
+  const cartDialogRef = useRef<HTMLElement>(null);
+  const checkoutDialogRef = useRef<HTMLDivElement>(null);
+  const addressDialogRef = useRef<HTMLDivElement>(null);
+  const profileDialogRef = useRef<HTMLDivElement>(null);
+
+  useDialogBehavior(showCart, () => setShowCart(false), cartDialogRef);
+  useDialogBehavior(showProfile, () => setShowProfile(false), profileDialogRef);
+  useDialogBehavior(showAddressForm, () => setShowAddressForm(false), addressDialogRef);
+  useDialogBehavior(Boolean(checkoutOrder), () => setCheckoutOrder(null), checkoutDialogRef);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -108,22 +114,24 @@ export default function CustomerStorefront({ onLogout }: Props) {
   const [profileMessage, setProfileMessage] = useState('');
   const [profileError, setProfileError] = useState('');
 
-  async function loadProducts() {
+  async function loadProducts(activeFilters?: StorefrontFilters) {
     try {
       setLoading(true);
       setError('');
 
-      const data = await getStorefrontProducts({
-        search,
-        category,
-        pharmacyId,
-        minPrice,
-        maxPrice,
-      });
+      const data = await getStorefrontProducts(
+        activeFilters ?? {
+          search,
+          category,
+          pharmacyId,
+          minPrice,
+          maxPrice,
+        },
+      );
 
       setProducts(data);
     } catch (err) {
-      console.error(err);
+      reportError('CustomerStorefront', err);
       setError('دریافت محصولات با خطا مواجه شد.');
     } finally {
       setLoading(false);
@@ -137,7 +145,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
       setCart(data);
       setCartError('');
     } catch (err) {
-      console.error(err);
+      reportError('CustomerStorefront', err);
       setCartError('دریافت سبد خرید با خطا مواجه شد.');
     } finally {
       setCartLoading(false);
@@ -161,7 +169,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
         setSelectedShippingAddressId('');
       }
     } catch (err) {
-      console.error(err);
+      reportError('CustomerStorefront', err);
       setShippingError('دریافت آدرس‌های ارسال انجام نشد.');
     } finally {
       setShippingLoading(false);
@@ -182,7 +190,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
         setOrdersError('');
       })
       .catch((err) => {
-        console.error(err);
+        reportError('CustomerStorefront', err);
         setOrdersError('دریافت سفارش‌ها با خطا مواجه شد. لطفاً دوباره تلاش کنید.');
       })
       .finally(() => setOrdersLoading(false));
@@ -190,9 +198,12 @@ export default function CustomerStorefront({ onLogout }: Props) {
     getMyNotifications()
       .then(setNotifications)
       .catch((err) => {
-        console.error(err);
+        reportError('CustomerStorefront', err);
         setNotificationsError('دریافت اعلان‌ها انجام نشد.');
       });
+
+    // Initial load only. Filter submissions call loadProducts explicitly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const pharmacies = useMemo(() => {
@@ -215,7 +226,13 @@ export default function CustomerStorefront({ onLogout }: Props) {
 
   function submitFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    loadProducts();
+    void loadProducts({
+      search: search.trim() || undefined,
+      category: category || undefined,
+      pharmacyId: pharmacyId || undefined,
+      minPrice: minPrice.trim() || undefined,
+      maxPrice: maxPrice.trim() || undefined,
+    });
   }
 
   function clearFilters() {
@@ -224,12 +241,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
     setPharmacyId('');
     setMinPrice('');
     setMaxPrice('');
-
-    setTimeout(() => {
-      getStorefrontProducts()
-        .then(setProducts)
-        .catch(() => setError('دریافت محصولات با خطا مواجه شد.'));
-    }, 0);
+    void loadProducts({});
   }
 
   async function handleAddToCart(item: StorefrontProduct) {
@@ -243,11 +255,9 @@ export default function CustomerStorefront({ onLogout }: Props) {
       setCouponError('');
       setShowCart(true);
     } catch (err) {
-      console.error(err);
+      reportError('CustomerStorefront', err);
       setCartError(
-        err instanceof Error
-          ? err.message
-          : 'افزودن محصول به سبد خرید انجام نشد.',
+        getUserMessage(err, 'افزودن محصول به سبد خرید انجام نشد.'),
       );
     } finally {
       setAddingStockItemId('');
@@ -274,11 +284,9 @@ export default function CustomerStorefront({ onLogout }: Props) {
       setCouponPreview(null);
       setCouponError('');
     } catch (err) {
-      console.error(err);
+      reportError('CustomerStorefront', err);
       setCartError(
-        err instanceof Error
-          ? err.message
-          : 'تغییر تعداد انجام نشد.',
+        getUserMessage(err, 'تغییر تعداد انجام نشد.'),
       );
     }
   }
@@ -291,7 +299,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
       setCouponPreview(null);
       setCouponError('');
     } catch (err) {
-      console.error(err);
+      reportError('CustomerStorefront', err);
       setCartError('حذف محصول از سبد انجام نشد.');
     }
   }
@@ -372,11 +380,9 @@ export default function CustomerStorefront({ onLogout }: Props) {
       resetAddressForm();
       setShowAddressForm(false);
     } catch (err) {
-      console.error(err);
+      reportError('CustomerStorefront', err);
       setShippingError(
-        err instanceof Error
-          ? err.message
-          : 'ذخیره آدرس انجام نشد.',
+        getUserMessage(err, 'ذخیره آدرس انجام نشد.'),
       );
     } finally {
       setShippingSaving(false);
@@ -384,9 +390,14 @@ export default function CustomerStorefront({ onLogout }: Props) {
   }
 
   async function handleDeleteAddress(id: string) {
-    if (!window.confirm('آیا از حذف این آدرس مطمئن هستید؟')) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: 'حذف آدرس',
+      message: 'این آدرس از فهرست آدرس‌های ارسال حذف می‌شود.',
+      confirmLabel: 'حذف',
+      tone: 'danger',
+    });
+
+    if (!confirmed) return;
 
     try {
       setShippingError('');
@@ -407,11 +418,9 @@ export default function CustomerStorefront({ onLogout }: Props) {
         );
       }
     } catch (err) {
-      console.error(err);
+      reportError('CustomerStorefront', err);
       setShippingError(
-        err instanceof Error
-          ? err.message
-          : 'حذف آدرس انجام نشد.',
+        getUserMessage(err, 'حذف آدرس انجام نشد.'),
       );
     }
   }
@@ -427,11 +436,9 @@ export default function CustomerStorefront({ onLogout }: Props) {
       await loadShippingAddresses();
       setSelectedShippingAddressId(id);
     } catch (err) {
-      console.error(err);
+      reportError('CustomerStorefront', err);
       setShippingError(
-        err instanceof Error
-          ? err.message
-          : 'تغییر آدرس پیش‌فرض انجام نشد.',
+        getUserMessage(err, 'تغییر آدرس پیش‌فرض انجام نشد.'),
       );
     }
   }
@@ -454,7 +461,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
       setCouponCode(preview.couponCode);
     } catch (err) {
       setCouponError(
-        err instanceof Error ? err.message : 'اعتبارسنجی کد تخفیف انجام نشد.',
+        getUserMessage(err, 'اعتبارسنجی کد تخفیف انجام نشد.'),
       );
     } finally {
       setCouponLoading(false);
@@ -472,7 +479,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
         ),
       );
     } catch (err) {
-      console.error(err);
+      reportError('CustomerStorefront', err);
       setNotificationsError('علامت‌گذاری اعلان انجام نشد.');
     }
   }
@@ -506,7 +513,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
         const updatedOrders = await getOrders();
         setOrders(updatedOrders);
       } catch (err) {
-        console.error(err);
+        reportError('CustomerStorefront', err);
         setOrdersError('سفارش ثبت شد، اما دریافت فهرست سفارش‌ها با خطا مواجه شد.');
       } finally {
         setOrdersLoading(false);
@@ -519,11 +526,9 @@ export default function CustomerStorefront({ onLogout }: Props) {
       });
       setShowCart(false);
     } catch (err) {
-      console.error(err);
+      reportError('CustomerStorefront', err);
       setCheckoutError(
-        err instanceof Error
-          ? err.message
-          : 'ثبت سفارش انجام نشد.',
+        getUserMessage(err, 'ثبت سفارش انجام نشد.'),
       );
     } finally {
       setCheckoutLoading(false);
@@ -576,9 +581,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
       setConfirmPassword('');
     } catch (err) {
       setProfileError(
-        err instanceof Error
-          ? err.message
-          : 'تغییر رمز عبور انجام نشد.',
+        getUserMessage(err, 'تغییر رمز عبور انجام نشد.'),
       );
     } finally {
       setProfileLoading(false);
@@ -592,7 +595,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
     >
       {checkoutOrder && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4">
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+          <div ref={checkoutDialogRef} role="dialog" aria-modal="true" aria-label="تأیید سفارش" tabIndex={-1} className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl outline-none">
             <div className="text-center">
               <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-3xl text-emerald-700">
                 ✓
@@ -618,14 +621,14 @@ export default function CustomerStorefront({ onLogout }: Props) {
               <div className="flex items-center justify-between">
                 <span className="text-slate-500">مبلغ نهایی</span>
                 <span className="font-black text-emerald-700">
-                  {formatPrice(checkoutOrder.totalAmount)} تومان
+                  {formatMoney(checkoutOrder.totalAmount)}
                 </span>
               </div>
 
               <div className="flex items-center justify-between">
                 <span className="text-slate-500">تعداد اقلام</span>
                 <span className="font-bold text-slate-900">
-                  {formatPrice(
+                  {formatNumber(
                     checkoutOrder.items.reduce(
                       (sum, item) => sum + item.quantity,
                       0,
@@ -665,6 +668,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                aria-label="جستجوی نام محصول، برند یا ماده مؤثره"
                 placeholder="جستجوی نام محصول، برند یا ماده مؤثره..."
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-medical-500 focus:bg-white focus:ring-4 focus:ring-medical-100"
               />
@@ -679,7 +683,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
             سبد خرید
             {cart && cart.totalItems > 0 && (
               <span className="mr-2 inline-flex min-w-6 items-center justify-center rounded-full bg-medical-600 px-1.5 py-0.5 text-xs font-bold text-white">
-                {formatPrice(cart.totalItems)}
+                {formatNumber(cart.totalItems)}
               </span>
             )}
           </button>
@@ -712,7 +716,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
             محصولات
           </button>
           <button type="button" onClick={() => setActiveCustomerPage('orders')} className={`rounded-xl px-4 py-2 text-sm font-bold transition ${activeCustomerPage === 'orders' ? 'bg-medical-600 text-white' : 'border border-slate-200 bg-white text-slate-700'}`}>
-            سفارش‌های من ({formatPrice(orders.length)})
+            سفارش‌های من ({formatNumber(orders.length)})
           </button>
         </nav>
 
@@ -725,7 +729,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
             <span>
               <span className="block font-black text-slate-900">اعلان‌ها و تخفیف‌های من</span>
               <span className="mt-1 block text-xs text-slate-500">
-                {formatPrice(notifications.filter((item) => !item.readAt).length)} اعلان خوانده‌نشده
+                {formatNumber(notifications.filter((item) => !item.readAt).length)} اعلان خوانده‌نشده
               </span>
             </span>
             <span className="rounded-xl bg-medical-50 px-3 py-2 text-sm font-bold text-medical-700">
@@ -796,7 +800,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
             </div>
 
             <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
-              {formatPrice(orders.length)} سفارش
+              {formatNumber(orders.length)} سفارش
             </span>
           </div>
 
@@ -815,7 +819,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
                     const data = await getOrders();
                     setOrders(data);
                   } catch (err) {
-                    console.error(err);
+                    reportError('CustomerStorefront', err);
                     setOrdersError('دریافت سفارش‌ها با خطا مواجه شد. لطفاً دوباره تلاش کنید.');
                   } finally {
                     setOrdersLoading(false);
@@ -902,7 +906,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
                             تعداد اقلام
                           </div>
                           <div className="mt-1 text-sm font-bold text-slate-800">
-                            {formatPrice(itemCount)}
+                            {formatNumber(itemCount)}
                           </div>
                         </div>
 
@@ -911,7 +915,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
                             مبلغ نهایی
                           </div>
                           <div className="mt-1 text-sm font-black text-emerald-700">
-                            {formatPrice(order.totalAmount)} تومان
+                            {formatMoney(order.totalAmount)}
                           </div>
                         </div>
                       </div>
@@ -1008,7 +1012,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
                                     {item.productName}
                                   </div>
                                   <div className="mt-1 text-xs text-slate-500">
-                                    تعداد: {formatPrice(item.quantity)}
+                                    تعداد: {formatNumber(item.quantity)}
                                   </div>
                                 </div>
 
@@ -1017,10 +1021,10 @@ export default function CustomerStorefront({ onLogout }: Props) {
                                     قیمت واحد
                                   </div>
                                   <div className="mt-1 text-sm font-bold text-slate-800">
-                                    {formatPrice(item.unitPrice)} تومان
+                                    {formatMoney(item.unitPrice)}
                                   </div>
                                   <div className="mt-1 text-xs font-bold text-emerald-700">
-                                    جمع: {formatPrice(item.totalPrice)} تومان
+                                    جمع: {formatMoney(item.totalPrice)}
                                   </div>
                                 </div>
                               </div>
@@ -1032,7 +1036,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
                               مبلغ نهایی
                             </span>
                             <span className="text-lg font-black text-emerald-700">
-                              {formatPrice(order.totalAmount)} تومان
+                              {formatMoney(order.totalAmount)}
                             </span>
                           </div>
                         </div>
@@ -1124,13 +1128,13 @@ export default function CustomerStorefront({ onLogout }: Props) {
         </form>
 
         {error && (
-          <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div role="alert" className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {error}
           </div>
         )}
 
         {cartError && (
-          <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          <div role="alert" className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
             {cartError}
           </div>
         )}
@@ -1152,7 +1156,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
           <>
             <div className="mb-4 flex items-center justify-between">
               <span className="text-sm text-slate-500">
-                {formatPrice(products.length)} گزینه موجود
+                {formatNumber(products.length)} گزینه موجود
               </span>
             </div>
 
@@ -1200,17 +1204,14 @@ export default function CustomerStorefront({ onLogout }: Props) {
                           قیمت
                         </div>
                         <div className="text-lg font-black text-emerald-700">
-                          {formatPrice(item.sellingPrice)}
-                          <span className="mr-1 text-xs font-medium text-slate-500">
-                            تومان
-                          </span>
+                          {formatMoney(item.sellingPrice)}
                         </div>
                       </div>
 
                       <div className="text-left text-xs text-slate-500">
                         موجودی
                         <div className="font-bold text-slate-700">
-                          {formatPrice(item.availableQuantity)}
+                          {formatNumber(item.availableQuantity)}
                         </div>
                       </div>
                     </div>
@@ -1250,7 +1251,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
             className="absolute inset-0 bg-slate-900/40"
           />
 
-          <aside className="absolute right-0 top-0 flex h-full w-full max-w-md flex-col bg-white shadow-2xl">
+          <aside ref={cartDialogRef} role="dialog" aria-modal="true" aria-label="سبد خرید" tabIndex={-1} className="absolute right-0 top-0 flex h-full w-full max-w-md flex-col bg-white shadow-2xl outline-none">
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
               <div>
                 <h2 className="text-lg font-black">
@@ -1258,7 +1259,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
                 </h2>
                 <div className="text-xs text-slate-500">
                   {cart?.totalItems
-                    ? `${formatPrice(cart.totalItems)} قلم`
+                    ? `${formatNumber(cart.totalItems)} قلم`
                     : 'سبد خالی است'}
                 </div>
               </div>
@@ -1317,7 +1318,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
 
                       <div className="mt-4 flex items-center justify-between">
                         <div className="text-sm font-black text-emerald-700">
-                          {formatPrice(item.totalPrice)} تومان
+                          {formatMoney(item.totalPrice)}
                         </div>
 
                         <div className="flex items-center gap-2 rounded-xl border border-slate-200 p-1">
@@ -1335,7 +1336,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
                           </button>
 
                           <span className="min-w-8 text-center text-sm font-bold">
-                            {formatPrice(item.quantity)}
+                            {formatNumber(item.quantity)}
                           </span>
 
                           <button
@@ -1520,44 +1521,44 @@ export default function CustomerStorefront({ onLogout }: Props) {
                   <div className="mt-4 space-y-3 border-t border-slate-200 pt-4 text-sm">
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-slate-500">جمع اقلام</span>
-                      <span className="font-bold text-slate-900">{formatPrice(couponPreview?.subtotal ?? cart.subtotal)} تومان</span>
+                      <span className="font-bold text-slate-900">{formatMoney(couponPreview?.subtotal ?? cart.subtotal)}</span>
                     </div>
                     {couponPreview && (
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-emerald-700">تخفیف</span>
-                        <span className="font-bold text-emerald-700">− {formatPrice(couponPreview.discountAmount)} تومان</span>
+                        <span className="font-bold text-emerald-700">− {formatMoney(couponPreview.discountAmount)}</span>
                       </div>
                     )}
                     {couponPreview && (
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-slate-500">بسته‌بندی و خدمات</span>
-                        <span className="font-bold text-slate-900">{formatPrice(couponPreview.packagingServiceFee)} تومان</span>
+                        <span className="font-bold text-slate-900">{formatMoney(couponPreview.packagingServiceFee)}</span>
                       </div>
                     )}
                     {couponPreview && (
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-slate-500">هزینه ارسال</span>
                         <span className="font-bold text-slate-900">
-                          {couponPreview.freeShipping ? 'رایگان' : `${formatPrice(couponPreview.shippingAmount)} تومان`}
+                          {couponPreview.freeShipping ? 'رایگان' : `${formatMoney(couponPreview.shippingAmount)}`}
                         </span>
                       </div>
                     )}
                     <div className="flex items-center justify-between gap-3 border-t border-slate-200 pt-3">
                       <span className="font-bold text-slate-600">{couponPreview ? 'مبلغ نهایی با تخفیف' : 'جمع سبد'}</span>
                       <span className="text-xl font-black text-slate-900">
-                        {formatPrice(couponPreview?.totalAmount ?? cart.subtotal)} تومان
+                        {formatMoney(couponPreview?.totalAmount ?? cart.subtotal)}
                       </span>
                     </div>
                   </div>
 
                   {shippingError && (
-                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    <div role="alert" className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                       {shippingError}
                     </div>
                   )}
 
                   {checkoutError && (
-                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    <div role="alert" className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                       {checkoutError}
                     </div>
                   )}
@@ -1586,7 +1587,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
 
       {showAddressForm && (
         <div className="fixed inset-0 z-[115] flex items-center justify-center bg-slate-950/50 p-4">
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
+          <div ref={addressDialogRef} role="dialog" aria-modal="true" aria-label="آدرس ارسال" tabIndex={-1} className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl outline-none">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-xl font-black text-slate-900">
@@ -1612,10 +1613,10 @@ export default function CustomerStorefront({ onLogout }: Props) {
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
               <div className="sm:col-span-2">
-                <label className="text-sm font-bold text-slate-700">
+                <label htmlFor="storefront-field-1" className="text-sm font-bold text-slate-700">
                   نام گیرنده
                 </label>
-                <input
+                <input id="storefront-field-1"
                   value={addressForm.recipientName}
                   onChange={(e) =>
                     setAddressForm((current) => ({
@@ -1629,10 +1630,10 @@ export default function CustomerStorefront({ onLogout }: Props) {
               </div>
 
               <div>
-                <label className="text-sm font-bold text-slate-700">
+                <label htmlFor="storefront-field-2" className="text-sm font-bold text-slate-700">
                   شماره موبایل
                 </label>
-                <input
+                <input id="storefront-field-2"
                   value={addressForm.phone}
                   onChange={(e) =>
                     setAddressForm((current) => ({
@@ -1647,10 +1648,10 @@ export default function CustomerStorefront({ onLogout }: Props) {
               </div>
 
               <div>
-                <label className="text-sm font-bold text-slate-700">
+                <label htmlFor="storefront-field-3" className="text-sm font-bold text-slate-700">
                   کد پستی
                 </label>
-                <input
+                <input id="storefront-field-3"
                   value={addressForm.postalCode}
                   onChange={(e) =>
                     setAddressForm((current) => ({
@@ -1666,10 +1667,10 @@ export default function CustomerStorefront({ onLogout }: Props) {
               </div>
 
               <div>
-                <label className="text-sm font-bold text-slate-700">
+                <label htmlFor="storefront-field-4" className="text-sm font-bold text-slate-700">
                   استان
                 </label>
-                <input
+                <input id="storefront-field-4"
                   value={addressForm.province}
                   onChange={(e) =>
                     setAddressForm((current) => ({
@@ -1683,10 +1684,10 @@ export default function CustomerStorefront({ onLogout }: Props) {
               </div>
 
               <div>
-                <label className="text-sm font-bold text-slate-700">
+                <label htmlFor="storefront-field-5" className="text-sm font-bold text-slate-700">
                   شهر
                 </label>
-                <input
+                <input id="storefront-field-5"
                   value={addressForm.city}
                   onChange={(e) =>
                     setAddressForm((current) => ({
@@ -1700,10 +1701,10 @@ export default function CustomerStorefront({ onLogout }: Props) {
               </div>
 
               <div className="sm:col-span-2">
-                <label className="text-sm font-bold text-slate-700">
+                <label htmlFor="storefront-field-6" className="text-sm font-bold text-slate-700">
                   نشانی کامل
                 </label>
-                <textarea
+                <textarea id="storefront-field-6"
                   value={addressForm.address}
                   onChange={(e) =>
                     setAddressForm((current) => ({
@@ -1733,7 +1734,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
             </div>
 
             {shippingError && (
-              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 {shippingError}
               </div>
             )}
@@ -1769,7 +1770,7 @@ export default function CustomerStorefront({ onLogout }: Props) {
 
       {showProfile && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/50 p-4">
-          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+          <div ref={profileDialogRef} role="dialog" aria-modal="true" aria-label="حساب کاربری" tabIndex={-1} className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl outline-none">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-xl font-black text-slate-900">
@@ -1910,10 +1911,10 @@ export default function CustomerStorefront({ onLogout }: Props) {
               className="mt-6 space-y-4"
             >
               <div>
-                <label className="text-sm font-bold text-slate-700">
+                <label htmlFor="storefront-field-7" className="text-sm font-bold text-slate-700">
                   رمز عبور فعلی
                 </label>
-                <input
+                <input id="storefront-field-7"
                   type="password"
                   value={currentPassword}
                   onChange={(event) =>
@@ -1925,10 +1926,10 @@ export default function CustomerStorefront({ onLogout }: Props) {
               </div>
 
               <div>
-                <label className="text-sm font-bold text-slate-700">
+                <label htmlFor="storefront-field-8" className="text-sm font-bold text-slate-700">
                   رمز عبور جدید
                 </label>
-                <input
+                <input id="storefront-field-8"
                   type="password"
                   value={newPassword}
                   onChange={(event) =>
@@ -1940,10 +1941,10 @@ export default function CustomerStorefront({ onLogout }: Props) {
               </div>
 
               <div>
-                <label className="text-sm font-bold text-slate-700">
+                <label htmlFor="storefront-field-9" className="text-sm font-bold text-slate-700">
                   تکرار رمز عبور جدید
                 </label>
-                <input
+                <input id="storefront-field-9"
                   type="password"
                   value={confirmPassword}
                   onChange={(event) =>
@@ -1955,13 +1956,13 @@ export default function CustomerStorefront({ onLogout }: Props) {
               </div>
 
               {profileError && (
-                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                   {profileError}
                 </div>
               )}
 
               {profileMessage && (
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
                   {profileMessage}
                 </div>
               )}

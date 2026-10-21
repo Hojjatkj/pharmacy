@@ -1,4 +1,9 @@
 import { apiRequest } from './client';
+import {
+  clearAccessToken,
+  getAccessToken,
+  setAccessToken,
+} from '../lib/auth-token';
 
 export interface LoginResponse {
   accessToken: string;
@@ -61,6 +66,7 @@ export async function login(
     '/auth/login',
     {
       method: 'POST',
+      skipAuth: true,
       body: JSON.stringify({
         email,
         password,
@@ -68,10 +74,7 @@ export async function login(
     },
   );
 
-  localStorage.setItem(
-    'accessToken',
-    result.accessToken,
-  );
+  setAccessToken(result.accessToken);
 
   return result;
 }
@@ -124,5 +127,7 @@ export async function updatePassword(
 }
 
 export function logout() {
-  localStorage.removeItem('accessToken');
+  clearAccessToken();
 }
+
+export { getAccessToken };

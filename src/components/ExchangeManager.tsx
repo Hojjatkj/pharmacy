@@ -32,7 +32,10 @@ import {
 
 import { MeResponse } from '../api/auth';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Modal } from './Modal';
 import { PharmacyStockItem } from '../types';
+import { getUserMessage } from '../lib/errors';
+import { formatMoney } from '../lib/format';
 
 interface ExchangeManagerProps {
   currentUser: MeResponse;
@@ -40,9 +43,6 @@ interface ExchangeManagerProps {
 }
 
 type Panel = 'marketplace' | 'mine' | 'orders';
-
-const formatPrice = (value: number) =>
-  new Intl.NumberFormat('fa-IR').format(value);
 
 const formatDate = (value: string | null) => {
   if (!value) return 'بدون انقضا';
@@ -107,21 +107,24 @@ export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
   const offersQuery = useQuery({
     queryKey: ['exchange', 'offers'],
     queryFn: getExchangeOffers,
-    refetchInterval: 7000,
+    refetchInterval: 20_000,
+    staleTime: 10_000,
     refetchIntervalInBackground: false,
   });
 
   const myOffersQuery = useQuery({
     queryKey: ['exchange', 'offers', 'mine'],
     queryFn: getMyExchangeOffers,
-    refetchInterval: 7000,
+    refetchInterval: 20_000,
+    staleTime: 10_000,
     refetchIntervalInBackground: false,
   });
 
   const ordersQuery = useQuery({
     queryKey: ['exchange', 'orders'],
     queryFn: getExchangeOrders,
-    refetchInterval: 7000,
+    refetchInterval: 20_000,
+    staleTime: 10_000,
     refetchIntervalInBackground: false,
   });
 
@@ -269,9 +272,7 @@ export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
       await invalidateExchangeData();
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'ایجاد پیشنهاد ناموفق بود.',
+        getUserMessage(err, 'ایجاد پیشنهاد ناموفق بود.'),
       );
     } finally {
       setActionId(null);
@@ -312,9 +313,7 @@ export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
       setPanel('orders');
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'ثبت سفارش ناموفق بود.',
+        getUserMessage(err, 'ثبت سفارش ناموفق بود.'),
       );
     } finally {
       setActionId(null);
@@ -331,9 +330,7 @@ export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
       await invalidateExchangeData();
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'لغو پیشنهاد ناموفق بود.',
+        getUserMessage(err, 'لغو پیشنهاد ناموفق بود.'),
       );
     } finally {
       setActionId(null);
@@ -350,9 +347,7 @@ export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
       await invalidateExchangeData();
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'تأیید سفارش ناموفق بود.',
+        getUserMessage(err, 'تأیید سفارش ناموفق بود.'),
       );
     } finally {
       setActionId(null);
@@ -368,7 +363,7 @@ export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
       setSuccess('سفارش ارسال شد.');
       await invalidateExchangeData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'ارسال سفارش ناموفق بود.');
+      setError(getUserMessage(err, 'ارسال سفارش ناموفق بود.'));
     } finally {
       setActionId(null);
     }
@@ -383,7 +378,7 @@ export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
       setSuccess('دریافت سفارش ثبت شد.');
       await invalidateExchangeData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'ثبت دریافت سفارش ناموفق بود.');
+      setError(getUserMessage(err, 'ثبت دریافت سفارش ناموفق بود.'));
     } finally {
       setActionId(null);
     }
@@ -398,7 +393,7 @@ export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
       setSuccess('سفارش با موفقیت تکمیل شد.');
       await invalidateExchangeData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'تکمیل سفارش ناموفق بود.');
+      setError(getUserMessage(err, 'تکمیل سفارش ناموفق بود.'));
     } finally {
       setActionId(null);
     }
@@ -414,9 +409,7 @@ export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
       await invalidateExchangeData();
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : 'لغو سفارش ناموفق بود.',
+        getUserMessage(err, 'لغو سفارش ناموفق بود.'),
       );
     } finally {
       setActionId(null);
@@ -593,22 +586,13 @@ export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
       )}
 
       {showOfferForm && (
-        <Modal onClose={() => setShowOfferForm(false)}>
+        <Modal
+          open
+          title="ایجاد پیشنهاد فروش"
+          description="این بچ برای سایر داروخانه‌ها در بازار تبادل نمایش داده می‌شود."
+          onClose={() => setShowOfferForm(false)}
+        >
           <form onSubmit={handleCreateOffer} className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-extrabold text-slate-900">
-                ایجاد پیشنهاد فروش
-              </h3>
-
-              <button
-                type="button"
-                onClick={() => setShowOfferForm(false)}
-                className="text-slate-400 hover:text-slate-700"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
             <label className="block">
               <span className="mb-1 block text-xs font-bold text-slate-600">
                 موجودی
@@ -699,27 +683,13 @@ export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
       )}
 
       {buyOffer && (
-        <Modal onClose={() => setBuyOffer(null)}>
+        <Modal
+          open
+          title="ثبت سفارش خرید"
+          description={buyOffer.stockItem.product.name}
+          onClose={() => setBuyOffer(null)}
+        >
           <div className="space-y-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <h3 className="text-lg font-extrabold text-slate-900">
-                  ثبت سفارش
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  {buyOffer.stockItem.product.name}
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setBuyOffer(null)}
-                className="text-slate-400 hover:text-slate-700"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
             <div className="rounded-xl bg-slate-50 p-3 text-sm">
               <div className="flex justify-between">
                 <span>فروشنده</span>
@@ -728,7 +698,7 @@ export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
               <div className="mt-2 flex justify-between">
                 <span>قیمت واحد</span>
                 <strong>
-                  {formatPrice(buyOffer.unitPrice)}
+                  {formatMoney(buyOffer.unitPrice)}
                 </strong>
               </div>
               <div className="mt-2 flex justify-between">
@@ -790,7 +760,7 @@ const OfferCard: React.FC<{
       </div>
 
       <span className="rounded-lg bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700">
-        {formatPrice(offer.unitPrice)} / واحد
+        {formatMoney(offer.unitPrice)} / واحد
       </span>
     </div>
 
@@ -843,9 +813,6 @@ const MyOfferCard: React.FC<{
   actionId: string | null;
   canCancel: boolean;
   onCancel: () => void;
-  onShip: () => void;
-  onReceive: () => void;
-  onComplete: () => void;
 }> = ({ offer, actionId, canCancel, onCancel }) => (
   <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
     <div className="flex items-start justify-between gap-3">
@@ -874,7 +841,7 @@ const MyOfferCard: React.FC<{
 
       <div className="rounded-lg bg-slate-50 p-2 text-center">
         <span className="block text-slate-400">قیمت</span>
-        <strong>{formatPrice(offer.unitPrice)}</strong>
+        <strong>{formatMoney(offer.unitPrice)}</strong>
       </div>
     </div>
 
@@ -1016,7 +983,7 @@ const OrderCard: React.FC<{
 
           <span className="rounded-lg bg-slate-50 px-3 py-2">
             قیمت واحد:{' '}
-            <strong>{formatPrice(order.agreedUnitPrice)}</strong>
+            <strong>{formatMoney(order.agreedUnitPrice)}</strong>
           </span>
 
           {isSeller && (
@@ -1188,24 +1155,6 @@ const EmptyState: React.FC<{ text: string }> = ({ text }) => (
     <div>
       <Clock3 className="mx-auto mb-2 h-6 w-6 text-slate-400" />
       {text}
-    </div>
-  </div>
-);
-
-const Modal: React.FC<{
-  children: React.ReactNode;
-  onClose: () => void;
-}> = ({ children, onClose }) => (
-  <div
-    className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
-    onMouseDown={(event) => {
-      if (event.target === event.currentTarget) {
-        onClose();
-      }
-    }}
-  >
-    <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl">
-      {children}
     </div>
   </div>
 );

@@ -1,62 +1,256 @@
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3001/api/v1';
+import { API_BASE_URL, API_TIMEOUT_MS } from '../config';
+import { getAccessToken } from '../lib/auth-token';
 
+export const UNAUTHORIZED_EVENT = 'pharmart:unauthorized';
+
+export interface ApiErrorPayload {
+  code?: string;
+  message?: string;
+  traceId?: string;
+  details?: unknown;
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly traceId?: string;
+  readonly details?: unknown;
+  readonly retryAfterSeconds?: number;
+
+  constructor(options: {
+    status: number;
+    code: string;
+    message: string;
+    traceId?: string;
+    details?: unknown;
+    retryAfterSeconds?: number;
+  }) {
+    super(options.message);
+    this.name = 'ApiError';
+    this.status = options.status;
+    this.code = options.code;
+    this.traceId = options.traceId;
+    this.details = options.details;
+    this.retryAfterSeconds = options.retryAfterSeconds;
+  }
+}
+
+export interface ApiRequestOptions extends RequestInit {
+  /** Override the default request timeout (milliseconds). */
+  timeoutMs?: number;
+  /** Do not attach the bearer token (used by login/register). */
+  skipAuth?: boolean;
+}
+
+function createRequestId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function readRetryAfter(response: Response): number | undefined {
+  const raw = response.headers.get('retry-after');
+
+  if (!raw) return undefined;
+
+  const seconds = Number(raw);
+
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+}
+
+async function parseBody(response: Response): Promise<unknown> {
+  if (response.status === 204) {
+    return undefined;
+  }
+
+  const contentType = response.headers.get('content-type') ?? '';
+
+  if (contentType.includes('application/json')) {
+    try {
+      return await response.json();
+    } catch {
+      return undefined;
+    }
+  }
+
+  try {
+    return await response.text();
+  } catch {
+    return undefined;
+  }
+}
+
+function toApiError(response: Response, body: unknown): ApiError {
+  const payload =
+    typeof body === 'object' && body !== null ? (body as ApiErrorPayload) : undefined;
+
+  const fallbackMessage =
+    typeof body === 'string' && body.trim() && body.length < 500
+      ? body.trim()
+      : `Request failed with status ${response.status}`;
+
+  return new ApiError({
+    status: response.status,
+    code: payload?.code ?? `HTTP_${response.status}`,
+    message: payload?.message ?? fallbackMessage,
+    traceId: payload?.traceId,
+    details: payload?.details,
+    retryAfterSeconds: readRetryAfter(response),
+  });
+}
+
+function dispatchUnauthorized(): void {
+  window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+}
+
+/**
+ * Low-level HTTP client.
+ *
+ * Responsibilities kept here (and nowhere else):
+ * - base URL and auth header
+ * - request timeout / cancellation
+ * - typed error envelope
+ * - a single global signal when a session becomes invalid
+ */
 export async function apiRequest<T>(
   path: string,
-  options: RequestInit = {},
+  options: ApiRequestOptions = {},
 ): Promise<T> {
-  const token = localStorage.getItem('accessToken');
+  const { timeoutMs = API_TIMEOUT_MS, skipAuth = false, signal, ...init } = options;
 
-  const headers = new Headers(options.headers);
+  const token = skipAuth ? null : getAccessToken();
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
-  if (
-    !headers.has('Content-Type') &&
-    options.body &&
-    !(options.body instanceof FormData)
-  ) {
-    headers.set(
-      'Content-Type',
-      'application/json',
-    );
+  const abortFromCaller = () => controller.abort();
+  signal?.addEventListener('abort', abortFromCaller, { once: true });
+
+  const headers = new Headers(init.headers);
+
+  headers.set('Accept', 'application/json');
+  headers.set('X-Request-Id', createRequestId());
+
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
   }
 
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers,
-  });
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+      signal: controller.signal,
+      credentials: 'same-origin',
+    });
 
-  if (response.status === 204) {
-    return undefined as T;
+    const body = await parseBody(response);
+
+    if (!response.ok) {
+      const error = toApiError(response, body);
+
+      // A 401 on a request that carried a token means the session is gone.
+      // A failed login is also 401, but there is no token to invalidate.
+      if (response.status === 401 && token) {
+        dispatchUnauthorized();
+      }
+
+      throw error;
+    }
+
+    return body as T;
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError({
+        status: 0,
+        code: 'TIMEOUT',
+        message: 'زمان پاسخ‌گویی سرور به پایان رسید. اتصال اینترنت را بررسی و دوباره تلاش کنید.',
+      });
+    }
+
+    throw new ApiError({
+      status: 0,
+      code: 'NETWORK_ERROR',
+      message: 'ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی کنید.',
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', abortFromCaller);
+  }
+}
+
+/** Downloads a binary response (Excel templates, invoices) with the same auth/error rules. */
+export async function apiRequestBlob(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<Blob> {
+  const { timeoutMs = API_TIMEOUT_MS, skipAuth = false, signal, ...init } = options;
+
+  const token = skipAuth ? null : getAccessToken();
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  const abortFromCaller = () => controller.abort();
+  signal?.addEventListener('abort', abortFromCaller, { once: true });
+
+  const headers = new Headers(init.headers);
+
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const contentType = response.headers.get('content-type') ?? '';
+  headers.set('X-Request-Id', createRequestId());
 
-  let data: unknown;
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+      signal: controller.signal,
+      credentials: 'same-origin',
+    });
 
-  if (contentType.includes('application/json')) {
-    data = await response.json();
-  } else {
-    data = await response.text();
+    if (!response.ok) {
+      const body = await parseBody(response);
+      const error = toApiError(response, body);
+
+      if (response.status === 401 && token) {
+        dispatchUnauthorized();
+      }
+
+      throw error;
+    }
+
+    return await response.blob();
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError({
+        status: 0,
+        code: 'TIMEOUT',
+        message: 'زمان دریافت فایل به پایان رسید. دوباره تلاش کنید.',
+      });
+    }
+
+    throw new ApiError({
+      status: 0,
+      code: 'NETWORK_ERROR',
+      message: 'ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی کنید.',
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', abortFromCaller);
   }
-
-  if (!response.ok) {
-    const message =
-      typeof data === 'object' &&
-      data !== null &&
-      'message' in data
-        ? String((data as { message: unknown }).message)
-        : typeof data === 'string' && data
-          ? data
-          : `Request failed with status ${response.status}`;
-
-    throw new Error(message);
-  }
-
-  return data as T;
 }
 
 export function getApiBaseUrl(): string {

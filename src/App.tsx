@@ -28,17 +28,36 @@ import {
 
 import {
   ActiveTab,
-  B2BExchangeMatch,
   Pharmacy,
   PharmacyStockItem,
   ProductItem,
 } from './types';
 
 import { AppShell } from './components/AppShell';
-import { LoginPage } from './components/LoginPage';
-import { PublicLandingPage } from './components/PublicLandingPage';
-import PublicProductCatalog from './components/PublicProductCatalog';
-import CustomerRegisterPage from './components/CustomerRegisterPage';
+import { FullPageLoader, StartupError } from './components/FullPageStates';
+import { Modal } from './components/Modal';
+import { createExchangeOffer } from './api/exchange';
+import {
+  ACCESS_TOKEN_KEY,
+  getAccessToken,
+  isTokenExpired,
+} from './lib/auth-token';
+import { getUserMessage, isUnauthorized } from './lib/errors';
+import { reportError } from './lib/telemetry';
+import { UNAUTHORIZED_EVENT } from './api/client';
+
+const LoginPage = lazy(() =>
+  import('./components/LoginPage').then((m) => ({ default: m.LoginPage })),
+);
+const PublicLandingPage = lazy(() =>
+  import('./components/PublicLandingPage').then((m) => ({ default: m.PublicLandingPage })),
+);
+const RegisterPage = lazy(() =>
+  import('./components/RegisterPage').then((m) => ({ default: m.RegisterPage })),
+);
+const PublicProductCatalog = lazy(() => import('./components/PublicProductCatalog'));
+const CustomerRegisterPage = lazy(() => import('./components/CustomerRegisterPage'));
+const CustomerStorefront = lazy(() => import('./components/CustomerStorefront'));
 const ProfilePage = lazy(() => import('./components/ProfilePage').then((m) => ({ default: m.ProfilePage })));
 const InventoryManager = lazy(() => import('./components/InventoryManager').then((m) => ({ default: m.InventoryManager })));
 const ExchangeManager = lazy(() => import('./components/ExchangeManager').then((m) => ({ default: m.ExchangeManager })));
@@ -46,11 +65,8 @@ const EscrowPaymentSimulator = lazy(() => import('./components/EscrowPaymentSimu
 const OperationalPlanView = lazy(() => import('./components/OperationalPlanView').then((m) => ({ default: m.OperationalPlanView })));
 const PharmacyDashboard = lazy(() => import('./components/PharmacyDashboard').then((m) => ({ default: m.PharmacyDashboard })));
 const StorefrontPreview = lazy(() => import('./components/StorefrontPreview').then((m) => ({ default: m.StorefrontPreview })));
-import { RegisterPage } from './components/RegisterPage';
 const AdminUsersPage = lazy(() => import('./components/AdminUsersPage').then((m) => ({ default: m.AdminUsersPage })));
 const PromotionCampaignManager = lazy(() => import('./components/PromotionCampaignManager'));
-import { initialAiMatches } from './data/mockData';
-import CustomerStorefront from './components/CustomerStorefront';
 
 const EMPTY_PLATFORM_PHARMACY: Pharmacy = {
   id: '',
@@ -71,7 +87,7 @@ const IDLE_TIMEOUT_MS = 20 * 60 * 1000;
 const IDLE_WARNING_SECONDS =
   Math.floor((IDLE_TIMEOUT_MS - IDLE_WARNING_MS) / 1000);
 
-const App: React.FC = () => {
+const AppContent: React.FC = () => {
   const [activeTab, setActiveTab] =
     useState<ActiveTab>('dashboard');
 
@@ -89,12 +105,15 @@ const App: React.FC = () => {
 
 
 
-  const [authenticated, setAuthenticated] =
-    useState(
-      Boolean(
-        localStorage.getItem('accessToken'),
-      ),
-    );
+  const [authenticated, setAuthenticated] = useState(() => {
+    const token = getAccessToken();
+
+    return Boolean(token) && !isTokenExpired(token);
+  });
+
+  const [startupError, setStartupError] = useState<string | null>(null);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  const requestSequence = useRef(0);
 
   // Keep browser Back/Forward synchronized with public landing and catalog.
   useEffect(() => {
@@ -154,17 +173,6 @@ const App: React.FC = () => {
   const [selectedPharmacy, setSelectedPharmacy] =
     useState<Pharmacy | null>(null);
 
-  const [aiMatches, setAiMatches] =
-    useState<B2BExchangeMatch[]>(
-      initialAiMatches,
-    );
-
-  const [
-    selectedMatchForEscrow,
-    setSelectedMatchForEscrow,
-  ] =
-    useState<B2BExchangeMatch | null>(null);
-
   const [showProfile, setShowProfile] =
     useState(false);
 
@@ -176,26 +184,62 @@ const App: React.FC = () => {
    * بنابراین تغییر selectedPharmacy باعث loop
    * در useEffect نمی‌شود.
    */
+  const clearSession = useCallback(
+    (options: { notice?: string; goToCatalog?: boolean } = {}) => {
+      logout();
+
+      initialLoadStartedRef.current = false;
+      requestSequence.current += 1;
+
+      setAuthenticated(false);
+      setCurrentUser(null);
+      setPharmacies([]);
+      setProducts([]);
+      setStockItems([]);
+      setSelectedPharmacy(null);
+      setShowProfile(false);
+      setActiveTab('operational_plan');
+      setError(null);
+      setStartupError(null);
+      setLoading(false);
+      setAuthScreen('login');
+      setSessionNotice(options.notice ?? null);
+
+      if (options.goToCatalog) {
+        setShowPublicCatalog(true);
+        setShowPublicLanding(false);
+      } else {
+        setShowPublicCatalog(false);
+        setShowPublicLanding(false);
+      }
+    },
+    [],
+  );
+
+  /*
+   * Loads the session and all data required by the authenticated shell.
+   *
+   * A sequence guard prevents a slow response for a previously selected
+   * pharmacy from overwriting the data of the currently selected one.
+   */
   const loadBackendData = useCallback(
-    async (
-      user?: MeResponse,
-      pharmacyIdOverride?: string,
-    ) => {
+    async (user?: MeResponse, pharmacyIdOverride?: string) => {
+      const sequence = ++requestSequence.current;
+
       setLoading(true);
       setError(null);
+      setStartupError(null);
 
       try {
-        const me =
-          user ?? (await getMe());
+        const me = user ?? (await getMe());
+
+        if (sequence !== requestSequence.current) return;
 
         setCurrentUser(me);
 
         /*
-         * USER مشتری عادی است و نباید وارد جریان
-         * عملیاتی Pharmacy شود.
-         *
-         * Storefront در مسیر جداگانه خودش
-         * اطلاعات قابل فروش را دریافت خواهد کرد.
+         * USER is a retail customer and must never enter the pharmacy
+         * operational UI. The storefront has its own data path.
          */
         if (me.role === 'USER') {
           setPharmacies([]);
@@ -205,113 +249,67 @@ const App: React.FC = () => {
           return;
         }
 
-        const pharmacyData =
-          await getPharmacies();
+        const pharmacyData = await getPharmacies();
 
-        let inventoryPharmacyId:
-          | string
-          | undefined;
+        if (sequence !== requestSequence.current) return;
 
-        if (
-          me.role === 'SUPER_ADMIN' ||
-          me.role === 'PLATFORM_ADMIN'
-        ) {
-          inventoryPharmacyId =
-            pharmacyIdOverride ??
-            pharmacyData[0]?.id;
-        } else {
-          inventoryPharmacyId =
-            me.pharmacyId ??
-            undefined;
-        }
+        const isPlatformAdmin =
+          me.role === 'SUPER_ADMIN' || me.role === 'PLATFORM_ADMIN';
 
-        const [
-          inventoryData,
-          productData,
-        ] = await Promise.all([
-          getInventory(
-            inventoryPharmacyId,
-          ),
+        const inventoryPharmacyId = isPlatformAdmin
+          ? pharmacyIdOverride ?? pharmacyData[0]?.id
+          : me.pharmacyId ?? undefined;
+
+        const [inventoryData, productData] = await Promise.all([
+          getInventory(inventoryPharmacyId),
           getProducts(),
         ]);
 
-        setPharmacies(
-          pharmacyData,
-        );
+        if (sequence !== requestSequence.current) return;
 
-        setStockItems(
-          inventoryData,
-        );
+        setPharmacies(pharmacyData);
+        setStockItems(inventoryData);
+        setProducts(productData);
 
-        setProducts(
-          productData,
-        );
-
-        if (
-          me.role === 'SUPER_ADMIN' ||
-          me.role === 'PLATFORM_ADMIN'
-        ) {
+        if (isPlatformAdmin) {
           const targetPharmacy =
-            pharmacyData.find(
-              (pharmacy) =>
-                pharmacy.id ===
-                inventoryPharmacyId,
-            ) ??
+            pharmacyData.find((pharmacy) => pharmacy.id === inventoryPharmacyId) ??
             pharmacyData[0] ??
             null;
 
-          setSelectedPharmacy(
-            targetPharmacy,
-          );
+          setSelectedPharmacy(targetPharmacy);
         } else {
-          const ownPharmacy =
-            me.pharmacyId
-              ? pharmacyData.find(
-                  (pharmacy) =>
-                    pharmacy.id ===
-                    me.pharmacyId,
-                ) ?? null
-              : null;
+          const ownPharmacy = me.pharmacyId
+            ? pharmacyData.find((pharmacy) => pharmacy.id === me.pharmacyId) ?? null
+            : null;
 
-          setSelectedPharmacy(
-            ownPharmacy,
-          );
+          setSelectedPharmacy(ownPharmacy);
         }
       } catch (err) {
-        console.error(err);
+        if (sequence !== requestSequence.current) return;
 
-        if (
-          err instanceof Error &&
-          /401|unauthorized|unauthenticated/i.test(
-            err.message,
-          )
-        ) {
-          logout();
+        reportError('loadBackendData', err);
 
-          setAuthenticated(false);
-          setShowPublicCatalog(true);
-          setShowPublicLanding(false);
-          setAuthScreen('login');
-          setCurrentUser(null);
-          setSelectedPharmacy(null);
-          setPharmacies([]);
-          setProducts([]);
-          setStockItems([]);
-
+        if (isUnauthorized(err)) {
+          clearSession({
+            notice: 'نشست شما منقضی شده است. لطفاً دوباره وارد شوید.',
+          });
           return;
         }
 
-        setError(
-          err instanceof Error
-            ? err.message
-            : 'دریافت اطلاعات سامانه انجام نشد.',
-        );
+        const message = getUserMessage(err, 'دریافت اطلاعات سامانه انجام نشد.');
+
+        setStartupError(message);
+        setError(message);
       } finally {
-        setLoading(false);
+        if (sequence === requestSequence.current) {
+          setLoading(false);
+        }
       }
     },
-    [],
+    [clearSession],
   );
+
   /*
    * Refresh فقط Inventory
    *
@@ -319,39 +317,38 @@ const App: React.FC = () => {
    * دوباره بارگذاری شود؛ فقط موجودی Pharmacy فعال
    * از Backend خوانده می‌شود.
    */
-  const refreshInventory =
-    useCallback(
-      async (
-        pharmacyId?: string,
-      ) => {
-        const targetPharmacyId =
-          pharmacyId ??
-          selectedPharmacy?.id ??
-          (
-            currentUser?.role !== 'SUPER_ADMIN' &&
-            currentUser?.role !== 'PLATFORM_ADMIN'
-              ? currentUser?.pharmacyId
-              : undefined
-          );
+  const refreshInventory = useCallback(
+    async (pharmacyId?: string) => {
+      const targetPharmacyId =
+        pharmacyId ??
+        selectedPharmacy?.id ??
+        (currentUser?.role !== 'SUPER_ADMIN' &&
+        currentUser?.role !== 'PLATFORM_ADMIN'
+          ? currentUser?.pharmacyId
+          : undefined);
 
-        if (!targetPharmacyId) {
+      if (!targetPharmacyId) {
+        return;
+      }
+
+      try {
+        const inventoryData = await getInventory(targetPharmacyId);
+        setStockItems(inventoryData);
+        setError(null);
+      } catch (err) {
+        reportError('refreshInventory', err);
+
+        if (isUnauthorized(err)) {
+          clearSession({ notice: 'نشست شما منقضی شده است. لطفاً دوباره وارد شوید.' });
           return;
         }
 
-        const inventoryData =
-          await getInventory(
-            targetPharmacyId,
-          );
+        setError(getUserMessage(err, 'به‌روزرسانی موجودی انجام نشد.'));
+      }
+    },
+    [clearSession, currentUser, selectedPharmacy],
+  );
 
-        setStockItems(
-          inventoryData,
-        );
-      },
-      [
-        currentUser,
-        selectedPharmacy,
-      ],
-    );
   /*
    * بعد از Login فقط authenticated تغییر می‌کند.
    *
@@ -360,28 +357,19 @@ const App: React.FC = () => {
    *
    * این کار مشکل پرش صفحه را برطرف می‌کند.
    */
-  const handleLoginSuccess =
-    useCallback(() => {
-      setAuthenticated(true);
-    }, []);
+  const handleLoginSuccess = useCallback(() => {
+    setSessionNotice(null);
+    initialLoadStartedRef.current = false;
+    setAuthenticated(true);
+  }, []);
 
-  /*
-   * فقط یک Load بعد از authenticated شدن.
-   */
-  console.log(
-    '[AUTH STATE]',
-    authenticated,
-    'token:',
-    Boolean(localStorage.getItem('accessToken')),
-  );
+  const extendSession = useCallback(() => {
+    lastActivityRef.current = Date.now();
+    setShowIdleWarning(false);
+    setIdleSecondsLeft(IDLE_WARNING_SECONDS);
+  }, []);
 
   useEffect(() => {
-    console.log(
-      '[LOAD EFFECT]',
-      authenticated,
-      Date.now(),
-    );
-
     if (!authenticated) {
       initialLoadStartedRef.current = false;
       setLoading(false);
@@ -402,29 +390,49 @@ const App: React.FC = () => {
   /*
    * Logout
    */
-  const handleLogout =
-    useCallback(() => {
-      logout();
+  const handleLogout = useCallback(() => {
+    clearSession({ goToCatalog: true });
+  }, [clearSession]);
 
-      initialLoadStartedRef.current = false;
+  /*
+   * Session hardening:
+   * - any 401 from the API ends the local session exactly once
+   * - logging out in one tab logs out the other tabs
+   * - an expired JWT is detected before the next request
+   */
+  useEffect(() => {
+    if (!authenticated) return undefined;
 
-      setAuthenticated(false);
-      setShowPublicCatalog(true);
-      setShowPublicLanding(false);
-      setAuthScreen('login');
-      setCurrentUser(null);
-      setPharmacies([]);
-      setProducts([]);
-      setStockItems([]);
-      setSelectedPharmacy(null);
-      setSelectedMatchForEscrow(null);
-      setShowProfile(false);
-      setActiveTab(
-        'operational_plan',
-      );
-      setError(null);
-      setLoading(false);
-    }, []);
+    const endSession = () =>
+      clearSession({
+        notice: 'نشست شما منقضی شده است. لطفاً دوباره وارد شوید.',
+      });
+
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === ACCESS_TOKEN_KEY && !event.newValue) {
+        endSession();
+      }
+    };
+
+    const checkExpiry = () => {
+      if (document.visibilityState === 'visible' && isTokenExpired()) {
+        endSession();
+      }
+    };
+
+    window.addEventListener(UNAUTHORIZED_EVENT, endSession);
+    window.addEventListener('storage', onStorage);
+    document.addEventListener('visibilitychange', checkExpiry);
+
+    const interval = window.setInterval(checkExpiry, 30_000);
+
+    return () => {
+      window.removeEventListener(UNAUTHORIZED_EVENT, endSession);
+      window.removeEventListener('storage', onStorage);
+      document.removeEventListener('visibilitychange', checkExpiry);
+      window.clearInterval(interval);
+    };
+  }, [authenticated, clearSession]);
 
   /*
    * تغییر Pharmacy فقط برای PLATFORM_ADMIN
@@ -476,7 +484,10 @@ const App: React.FC = () => {
         if (idleFor >= IDLE_TIMEOUT_MS) {
           window.clearInterval(interval);
           setShowIdleWarning(false);
-          handleLogout();
+          clearSession({
+            goToCatalog: true,
+            notice: 'به دلیل عدم فعالیت از حساب خارج شدید.',
+          });
           return;
         }
 
@@ -506,7 +517,7 @@ const App: React.FC = () => {
       };
     }, [
       authenticated,
-      handleLogout,
+      clearSession,
     ]);
   const handleSelectPharmacy =
     useCallback(
@@ -623,160 +634,39 @@ const App: React.FC = () => {
     );
 
   /*
-   * Push inventory to B2B Exchange
+   * Publishes a stock batch as a real B2B exchange offer.
    *
-   * فعلاً این بخش Mock است و API واقعی B2B
-   * هنوز پیاده‌سازی نشده.
+   * The previous implementation only created an in-memory "AI match" object
+   * that was never sent to the server and disappeared on reload. This now uses
+   * the exchange API that already exists in the backend.
    */
-  const handlePushToExchange =
-    useCallback(
-      (item: PharmacyStockItem) => {
-        if (!selectedPharmacy) {
-          return;
-        }
+  const handlePushToExchange = useCallback(async (item: PharmacyStockItem) => {
+    const availableQuantity = Math.max(0, Math.floor(item.currentStock - item.reservedStock));
 
-        const existingMatch =
-          aiMatches.find(
-            (match) =>
-              match.product.id ===
-                item.product.id &&
-              match.sourcePharmacy.id ===
-                selectedPharmacy.id &&
-              match.batchNumber ===
-                item.batchNumber,
-          );
+    if (availableQuantity < 1) {
+      throw new Error('موجودی آزاد این بچ برای عرضه در تبادل کافی نیست.');
+    }
 
-        if (existingMatch) {
-          setActiveTab(
-            'ai_exchange',
-          );
+    if (!Number.isFinite(item.minAcceptablePriceB2B) || item.minAcceptablePriceB2B <= 0) {
+      throw new Error('برای عرضه در تبادل، حداقل قیمت قابل قبول را در موجودی ثبت کنید.');
+    }
 
-          return;
-        }
+    const expiry = item.expiryDate
+      ? new Date(`${item.expiryDate.slice(0, 10)}T23:59:59`)
+      : null;
 
-        const targetPharmacy =
-          pharmacies.find(
-            (pharmacy) =>
-              pharmacy.id !==
-              selectedPharmacy.id,
-          );
+    const expiresAt =
+      expiry && !Number.isNaN(expiry.getTime())
+        ? expiry.toISOString()
+        : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-        if (!targetPharmacy) {
-          setActiveTab(
-            'ai_exchange',
-          );
-
-          return;
-        }
-
-        const availableQuantity =
-          Math.max(
-            0,
-            item.currentStock -
-              item.reservedStock,
-          );
-
-        const recommendedTransferQty =
-          Math.max(
-            1,
-            Math.min(
-              availableQuantity,
-              Math.floor(
-                item.dailySalesVelocity >
-                  0
-                  ? item.currentStock -
-                      item.reservedStock
-                  : availableQuantity,
-              ),
-            ),
-          );
-
-        const discountPercentage =
-          item.originalCost > 0
-            ? Math.max(
-                0,
-                Math.round(
-                  ((item.originalCost -
-                    item.minAcceptablePriceB2B) /
-                    item.originalCost) *
-                    100,
-                ),
-              )
-            : 0;
-
-        const estimatedLossAvoided =
-          Math.max(
-            0,
-            item.originalCost *
-              availableQuantity -
-              item.minAcceptablePriceB2B *
-                availableQuantity,
-          );
-
-        const newMatch: B2BExchangeMatch =
-          {
-            id: `local-${Date.now()}`,
-            sourcePharmacy:
-              selectedPharmacy,
-            targetPharmacy,
-            product:
-              item.product,
-            batchNumber:
-              item.batchNumber,
-            expiryDate:
-              item.expiryDate,
-            availableQuantity,
-            recommendedTransferQty,
-            originalPrice:
-              item.originalCost,
-            aiSuggestedPrice:
-              item.minAcceptablePriceB2B,
-            discountPercentage,
-            estimatedLossAvoided,
-            targetDemandVelocity:
-              0,
-            reasoning:
-              'این پیشنهاد فعلاً در رابط کاربری ایجاد شده و پس از پیاده‌سازی API تبادل B2B از موتور واقعی تطبیق استفاده خواهد کرد.',
-            matchScore: 0,
-            status: 'pending',
-          };
-
-        setAiMatches(
-          (current) => [
-            newMatch,
-            ...current,
-          ],
-        );
-
-        setActiveTab(
-          'ai_exchange',
-        );
-      },
-      [
-        aiMatches,
-        pharmacies,
-        selectedPharmacy,
-      ],
-    );
-
-  /*
-   * Open escrow
-   *
-   * فعلاً Escrow نیز Simulator است.
-   */
-  const handleOpenEscrow =
-    useCallback(
-      (match: B2BExchangeMatch) => {
-        setSelectedMatchForEscrow(
-          match,
-        );
-
-        setActiveTab(
-          'escrow_payment',
-        );
-      },
-      [],
-    );
+    await createExchangeOffer({
+      stockItemId: item.id,
+      quantity: availableQuantity,
+      unitPrice: Math.round(item.minAcceptablePriceB2B),
+      expiresAt,
+    });
+  }, []);
 
   /*
    * Public landing, pharmacy registration, and login.
@@ -876,13 +766,16 @@ const App: React.FC = () => {
 
     return (
       <LoginPage
+        notice={sessionNotice}
         onLoginSuccess={handleLoginSuccess}
         onRegister={() => {
+          setSessionNotice(null);
           setShowPublicCatalog(false);
           setShowPublicLanding(false);
           setAuthScreen('register');
         }}
         onBackToLanding={() => {
+          setSessionNotice(null);
           setAuthScreen('login');
           setShowPublicCatalog(false);
           setShowPublicLanding(true);
@@ -895,42 +788,26 @@ const App: React.FC = () => {
    * Initial backend loading
    */
   if (loading) {
-    return (
-      <div
-        dir="rtl"
-        className="flex min-h-screen items-center justify-center bg-slate-50"
-      >
-        <div className="text-center">
-          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-emerald-600" />
-
-          <p className="mt-4 text-sm font-bold text-slate-600">
-            در حال دریافت اطلاعات...
-          </p>
-        </div>
-      </div>
-    );
+    return <FullPageLoader />;
   }
 
   if (!currentUser) {
+    if (startupError) {
+      return (
+        <StartupError
+          message={startupError}
+          onRetry={() => void loadBackendData()}
+          onLogout={() => clearSession({ goToCatalog: true })}
+        />
+      );
+    }
+
     return (
       <LoginPage
-        onLoginSuccess={
-          handleLoginSuccess
-        }
-        onRegister={() =>
-          setAuthScreen('register')
-        }
-        onBackToLanding={() => {
-          logout();
-          initialLoadStartedRef.current = false;
-          setAuthenticated(false);
-          setShowPublicCatalog(true);
-          setShowPublicLanding(false);
-          setAuthScreen('login');
-          setCurrentUser(null);
-          setLoading(false);
-          setError(null);
-        }}
+        notice={sessionNotice}
+        onLoginSuccess={handleLoginSuccess}
+        onRegister={() => setAuthScreen('register')}
+        onBackToLanding={() => clearSession({ goToCatalog: true })}
       />
     );
   }
@@ -951,7 +828,6 @@ const App: React.FC = () => {
    * Non-admin باید Pharmacy داشته باشد.
    */
   const requiresPharmacy =
-    currentUser.role !== 'USER' &&
     currentUser.role !== 'SUPER_ADMIN' &&
     currentUser.role !== 'PLATFORM_ADMIN';
 
@@ -1137,14 +1013,7 @@ const App: React.FC = () => {
     case 'escrow_payment':
       pageContent = (
         <EscrowPaymentSimulator
-          selectedMatch={
-            selectedMatchForEscrow
-          }
-          onBack={() =>
-            setActiveTab(
-              'ai_exchange',
-            )
-          }
+          onBack={() => setActiveTab('ai_exchange')}
         />
       );
 
@@ -1153,16 +1022,8 @@ const App: React.FC = () => {
     case 'storefront_demo':
       pageContent = (
         <StorefrontPreview
-          pharmacy={
-            selectedPharmacy ??
-            navbarPharmacy
-          }
-          products={
-            products
-          }
-          stockItems={
-            visibleStockItems
-          }
+          pharmacy={selectedPharmacy ?? navbarPharmacy}
+          stockItems={visibleStockItems}
         />
       );
 
@@ -1211,18 +1072,7 @@ const App: React.FC = () => {
     case 'operational_plan':
     default:
       pageContent = (
-        <OperationalPlanView
-          pharmacy={
-            selectedPharmacy ??
-            navbarPharmacy
-          }
-          stockItems={
-            visibleStockItems
-          }
-          products={
-            products
-          }
-        />
+        <OperationalPlanView />
       );
 
       break;
@@ -1233,54 +1083,32 @@ const App: React.FC = () => {
       dir="rtl"
       className="min-h-screen bg-slate-50"
     >
-      {showIdleWarning && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 p-4"
-          dir="rtl"
-        >
-          <div className="w-full max-w-md rounded-3xl border border-amber-200 bg-white p-6 shadow-2xl">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-50 text-amber-600">
-              <span className="text-2xl font-black">!</span>
-            </div>
-
-            <h2 className="mt-5 text-center text-xl font-black text-slate-900">
-              نشست شما در حال پایان است
-            </h2>
-
-            <p className="mt-3 text-center text-sm leading-7 text-slate-500">
-              به دلیل عدم فعالیت، حساب شما به‌صورت خودکار
-              از سامانه خارج خواهد شد.
-            </p>
-
-            <div
-              className="mt-5 text-center text-3xl font-black text-amber-600"
-              dir="ltr"
-            >
-              {String(
-                Math.floor(idleSecondsLeft / 60),
-              ).padStart(2, '0')}
-              :
-              {String(
-                idleSecondsLeft % 60,
-              ).padStart(2, '0')}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                lastActivityRef.current = Date.now();
-                setShowIdleWarning(false);
-                setIdleSecondsLeft(
-                  IDLE_WARNING_SECONDS,
-                );
-              }}
-              className="mt-6 h-12 w-full rounded-xl bg-medical-600 text-sm font-extrabold text-white shadow-lg shadow-medical-600/20 transition hover:bg-medical-700"
-            >
-              ادامه فعالیت
-            </button>
+      <Modal
+        open={showIdleWarning}
+        onClose={extendSession}
+        title="نشست شما در حال پایان است"
+        description="به دلیل عدم فعالیت، حساب شما به‌صورت خودکار از سامانه خارج خواهد شد."
+        size="sm"
+      >
+        <div className="space-y-4 text-center">
+          <div
+            className="font-mono text-3xl font-black text-amber-600"
+            dir="ltr"
+            aria-live="polite"
+          >
+            {String(Math.floor(idleSecondsLeft / 60)).padStart(2, '0')}:
+            {String(idleSecondsLeft % 60).padStart(2, '0')}
           </div>
+
+          <button
+            type="button"
+            onClick={extendSession}
+            className="h-12 w-full rounded-xl bg-medical-600 text-sm font-extrabold text-white shadow-lg shadow-medical-600/20 transition hover:bg-medical-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-medical-500/30"
+          >
+            ادامه فعالیت
+          </button>
         </div>
-      )}
+      </Modal>
 
       <AppShell
         selectedPharmacy={navbarPharmacy}
@@ -1331,6 +1159,14 @@ const App: React.FC = () => {
     </div>
   );
 };
+function App() {
+  return (
+    <Suspense fallback={<FullPageLoader />}>
+      <AppContent />
+    </Suspense>
+  );
+}
+
 const PageLoadingFallback = () => (
   <div
     dir="rtl"

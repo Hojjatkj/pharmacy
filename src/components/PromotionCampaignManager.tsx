@@ -8,9 +8,6 @@ import {
 const inputClass =
   'mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100';
 
-const toman = (value: number) =>
-  `${value.toLocaleString('fa-IR')} تومان`;
-
 export function PromotionCampaignManager() {
   const [name, setName] = useState('');
   const [message, setMessage] = useState('');

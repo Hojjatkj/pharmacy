@@ -15,13 +15,14 @@ import {
   RefreshCw,
   ShoppingCart,
   Store,
-  TrendingDown,
   TrendingUp,
   Warehouse,
   Zap,
 } from 'lucide-react';
 
 import { apiRequest } from '../api/client';
+import { getUserMessage } from '../lib/errors';
+import { formatMoney } from '../lib/format';
 
 import {
   ActiveTab,
@@ -41,22 +42,6 @@ const numberFormatter = new Intl.NumberFormat('fa-IR');
 
 function formatNumber(value: number) {
   return numberFormatter.format(Math.round(value));
-}
-
-function formatMoney(value: number) {
-  return `${numberFormatter.format(Math.round(value))} ریال`;
-}
-
-function shortMoney(value: number) {
-  const million = value / 1_000_000;
-
-  if (million >= 1) {
-    return `${numberFormatter.format(
-      Math.round(million * 10) / 10,
-    )}M`;
-  }
-
-  return formatNumber(value);
 }
 
 function riskLabel(risk: PharmacyStockItem['riskLevel']) {
@@ -122,7 +107,7 @@ export function PharmacyDashboard({
     } catch (error) {
       setEmailFeedback({
         type: 'error',
-        message: error instanceof Error ? error.message : 'ارسال ایمیل ناموفق بود',
+        message: getUserMessage(error, 'ارسال ایمیل ناموفق بود'),
       });
     } finally {
       setEmailSending(false);
@@ -1046,7 +1031,6 @@ function MetricCard({
 function RiskRow({
   label,
   count,
-  total,
   percent,
   className,
 }: {

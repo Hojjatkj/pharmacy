@@ -6,22 +6,26 @@ import {
   Bot, 
   ShieldCheck, 
   Scale, 
-  ChevronRight, 
-  Download, 
   CheckCircle2, 
   AlertTriangle, 
-  ArrowRightLeft,
   Sparkles,
   TrendingDown,
   Building,
-  CreditCard,
-  Lock,
   Copy,
   Check
 } from 'lucide-react';
 
+type PlanSection =
+  | 'overview'
+  | 'requirements'
+  | 'inventory'
+  | 'ai_matching'
+  | 'ui_ux'
+  | 'payment_escrow'
+  | 'legal';
+
 export const OperationalPlanView: React.FC = () => {
-  const [activeSection, setActiveSection] = useState<'overview' | 'requirements' | 'inventory' | 'ai_matching' | 'ui_ux' | 'payment_escrow' | 'legal'>('overview');
+  const [activeSection, setActiveSection] = useState<PlanSection>('overview');
   const [copied, setCopied] = useState(false);
 
   const handleCopySummary = () => {
@@ -80,7 +84,7 @@ export const OperationalPlanView: React.FC = () => {
           return (
             <button
               key={item.id}
-              onClick={() => setActiveSection(item.id as any)}
+              onClick={() => setActiveSection(item.id as PlanSection)}
               className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
                 isActive 
                   ? 'bg-slate-900 text-white shadow'
