@@ -1,0 +1,295 @@
+import React from 'react';
+import BrandMark from './BrandMark';
+
+import { ActiveTab, Pharmacy } from '../types';
+import { MeResponse } from '../api/auth';
+
+import {
+  LayoutDashboard,
+  Sparkles,
+  Boxes,
+  ShieldCheck,
+  Store,
+  Building2,
+  CheckCircle2,
+  LogOut,
+  UserCircle,
+  Users,
+  BarChart3,
+  ClipboardList,
+  Tag,
+} from 'lucide-react';
+
+interface AppShellProps {
+  children: React.ReactNode;
+  activeTab: ActiveTab;
+  onTabChange: (tab: ActiveTab) => void;
+  selectedPharmacy: Pharmacy;
+  allPharmacies: Pharmacy[];
+  onSelectPharmacy: (pharmacy: Pharmacy) => void;
+  currentUser?: MeResponse | null;
+  onProfileClick?: () => void;
+  onLogout?: () => void;
+}
+
+const mainItems = [
+  {
+    id: 'dashboard' as ActiveTab,
+    label: 'داشبورد',
+    icon: LayoutDashboard,
+  },
+  {
+    id: 'inventory_mgmt' as ActiveTab,
+    label: 'موجودی',
+    icon: Boxes,
+  },
+  {
+    id: 'ai_exchange' as ActiveTab,
+    label: 'تبادل B2B',
+    icon: Sparkles,
+  },
+  {
+    id: 'escrow_payment' as ActiveTab,
+    label: 'سفارش‌ها و پرداخت',
+    icon: ShieldCheck,
+  },
+  {
+    id: 'storefront_demo' as ActiveTab,
+    label: 'فروشگاه',
+    icon: Store,
+  },
+];
+
+export function AppShell({
+  children,
+  activeTab,
+  onTabChange,
+  selectedPharmacy,
+  allPharmacies,
+  onSelectPharmacy,
+  currentUser,
+  onProfileClick,
+  onLogout,
+}: AppShellProps) {
+  return (
+    <div
+      dir="rtl"
+      className="min-h-screen bg-slate-50 text-slate-900"
+    >
+      <aside className="fixed inset-y-0 right-0 z-40 hidden w-64 border-l border-slate-700 bg-slate-900 text-white lg:flex lg:flex-col">
+        <div className="border-b border-slate-700 px-5 py-5">
+          <div className="flex items-center gap-3">
+            <BrandMark size={44} className="shrink-0 rounded-xl shadow-sm" />
+
+            <div className="min-w-0">
+              <div className="truncate text-sm font-black text-white">
+                PharmArt
+              </div>
+
+              <div className="mt-0.5 text-[10px] font-medium text-slate-400">
+                مرکز تصمیم‌گیری داروخانه
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-3 py-5">
+          <div className="mb-3 px-3 text-[10px] font-black text-slate-400">
+            خدمات
+          </div>
+
+          <nav className="space-y-1">
+            {mainItems.map((item) => {
+              const Icon = item.icon;
+              const active = activeTab === item.id;
+
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onTabChange(item.id)}
+                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-sm font-bold transition ${
+                    active
+                      ? 'bg-emerald-500/15 text-emerald-300 shadow-sm ring-1 ring-emerald-400/20'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <Icon
+                    className={`h-5 w-5 ${
+                      active
+                        ? 'text-medical-600'
+                        : 'text-slate-400'
+                    }`}
+                  />
+
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="my-6 border-t border-slate-700" />
+
+          <div className="mb-3 px-3 text-[10px] font-black text-slate-400">
+            تحلیل و سیستم
+          </div>
+
+          <nav className="space-y-1">
+            <button
+              type="button"
+              onClick={() => onTabChange('dashboard')}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-sm font-bold text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+            >
+              <BarChart3 className="h-5 w-5 text-slate-400" />
+              <span>گزارش‌ها</span>
+            </button>
+
+
+            {(currentUser?.role === 'SUPER_ADMIN' ||
+              currentUser?.role === 'PLATFORM_ADMIN') && (
+              <>
+                <div className="my-4 border-t border-slate-700" />
+
+                <div className="mb-3 px-3 text-[10px] font-black text-slate-400">
+                  مدیریت سیستم
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onTabChange('admin_users')}
+                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-sm font-bold transition ${
+                    activeTab === 'admin_users'
+                      ? 'bg-emerald-500/15 text-emerald-300 shadow-sm ring-1 ring-emerald-400/20'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <Users className="h-5 w-5 text-slate-400" />
+                  <span>مدیریت کاربران</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onTabChange('promotions')}
+                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-sm font-bold transition ${
+                    activeTab === 'promotions'
+                      ? 'bg-emerald-500/15 text-emerald-300 shadow-sm ring-1 ring-emerald-400/20'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <Tag className="h-5 w-5 text-slate-400" />
+                  <span>مدیریت کمپین‌ها</span>
+                </button>
+              </>
+            )}
+          </nav>
+        </div>
+
+        <div className="border-t border-slate-700 p-4">
+          {currentUser && (
+            <button
+              type="button"
+              onClick={onProfileClick}
+              className="mb-2 flex w-full items-center gap-3 rounded-xl p-2 text-right transition hover:bg-slate-800"
+            >
+              <UserCircle className="h-8 w-8 shrink-0 text-medical-600" />
+
+              <span className="min-w-0 flex-1">
+                <span
+                  dir="ltr"
+                  className="block truncate text-xs font-bold text-white"
+                >
+                  {currentUser.email}
+                </span>
+
+                <span className="mt-1 block text-[10px] text-slate-400">
+                  {currentUser.role === 'SUPER_ADMIN'
+                    ? 'مدیر ارشد سامانه'
+                    : currentUser.role === 'PLATFORM_ADMIN'
+                      ? 'مدیر پلتفرم'
+                      : currentUser.role === 'PHARMACY_OWNER'
+                        ? 'مالک داروخانه'
+                        : 'کارمند داروخانه'}
+                </span>
+              </span>
+            </button>
+          )}
+
+          {onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-300 transition hover:bg-rose-500/10 hover:text-rose-300"
+            >
+              <LogOut className="h-4 w-4" />
+              خروج از حساب
+            </button>
+          )}
+        </div>
+      </aside>
+
+      <div className="lg:mr-64">
+        <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur">
+          <div className="flex min-h-16 items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
+            <div className="min-w-0">
+              <div className="text-[10px] font-bold text-slate-400">
+                داروخانه فعال
+              </div>
+
+              <div className="mt-0.5 flex items-center gap-2">
+                <Building2 className="h-4 w-4 shrink-0 text-medical-600" />
+
+                <select
+                  value={selectedPharmacy.id}
+                  onChange={(event) => {
+                    const pharmacy = allPharmacies.find(
+                      (item) =>
+                        item.id === event.target.value,
+                    );
+
+                    if (pharmacy) {
+                      onSelectPharmacy(pharmacy);
+                    }
+                  }}
+                  disabled={allPharmacies.length === 0}
+                  className="max-w-[240px] cursor-pointer truncate border-0 bg-transparent p-0 text-sm font-black text-slate-900 outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {allPharmacies.map((pharmacy) => (
+                    <option
+                      key={pharmacy.id}
+                      value={pharmacy.id}
+                    >
+                      {pharmacy.avatar} {pharmacy.name} (
+                      {pharmacy.city})
+                    </option>
+                  ))}
+                </select>
+
+                <CheckCircle2 className="h-4 w-4 text-medical-500" />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="hidden rounded-xl bg-slate-50 px-3 py-2 text-[10px] font-bold text-slate-500 sm:flex sm:items-center sm:gap-2">
+                <ClipboardList className="h-4 w-4 text-medical-600" />
+                مرکز تصمیم‌گیری
+              </div>
+
+              <button
+                type="button"
+                onClick={onProfileClick}
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white transition hover:border-medical-200 hover:bg-medical-50"
+                title="پروفایل"
+              >
+                <UserCircle className="h-5 w-5 text-medical-600" />
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main className="min-h-[calc(100vh-64px)] p-4 sm:p-6 lg:p-8">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}

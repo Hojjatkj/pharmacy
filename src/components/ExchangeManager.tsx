@@ -1,0 +1,1211 @@
+import React, { useMemo, useState } from 'react';
+import {
+  ArrowLeftRight,
+  Ban,
+  Check,
+  Clock3,
+  Loader2,
+  Package,
+  Plus,
+  RefreshCw,
+  ShoppingCart,
+  Store,
+  X,
+} from 'lucide-react';
+
+import {
+  acceptExchangeOrder,
+  cancelExchangeOffer,
+  cancelExchangeOrder,
+  createExchangeOffer,
+  createExchangeOrder,
+  getExchangeOffers,
+  getExchangeOrders,
+  getMyExchangeOffers,
+  shipExchangeOrder,
+  receiveExchangeOrder,
+  completeExchangeOrder,
+  ExchangeOffer,
+  ExchangeOrder,
+  MyExchangeOffer,
+} from '../api/exchange';
+
+import { MeResponse } from '../api/auth';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { PharmacyStockItem } from '../types';
+
+interface ExchangeManagerProps {
+  currentUser: MeResponse;
+  stockItems: PharmacyStockItem[];
+}
+
+type Panel = 'marketplace' | 'mine' | 'orders';
+
+const formatPrice = (value: number) =>
+  new Intl.NumberFormat('fa-IR').format(value);
+
+const formatDate = (value: string | null) => {
+  if (!value) return 'بدون انقضا';
+
+  return new Intl.DateTimeFormat('fa-IR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(new Date(value));
+};
+
+const statusLabel: Record<string, string> = {
+  ACTIVE: 'فعال',
+  PAUSED: 'متوقف',
+  SOLD_OUT: 'تمام‌شده',
+  EXPIRED: 'منقضی',
+  CANCELLED: 'لغوشده',
+  PENDING: 'در انتظار',
+  ACCEPTED: 'تأییدشده',
+  RESERVED: 'رزروشده',
+  PAID: 'پرداخت‌شده',
+  SHIPPED: 'ارسال‌شده',
+  RECEIVED: 'دریافت‌شده',
+  COMPLETED: 'تکمیل‌شده',
+  DISPUTED: 'اختلاف',
+};
+
+const statusClass: Record<string, string> = {
+  ACTIVE: 'bg-emerald-100 text-emerald-700',
+  PAUSED: 'bg-amber-100 text-amber-700',
+  SOLD_OUT: 'bg-slate-100 text-slate-600',
+  EXPIRED: 'bg-slate-100 text-slate-600',
+  CANCELLED: 'bg-rose-100 text-rose-700',
+  PENDING: 'bg-amber-100 text-amber-700',
+  ACCEPTED: 'bg-emerald-100 text-emerald-700',
+  RESERVED: 'bg-blue-100 text-blue-700',
+  PAID: 'bg-blue-100 text-blue-700',
+  SHIPPED: 'bg-indigo-100 text-indigo-700',
+  RECEIVED: 'bg-indigo-100 text-indigo-700',
+  COMPLETED: 'bg-emerald-100 text-emerald-700',
+  DISPUTED: 'bg-rose-100 text-rose-700',
+};
+
+const StatusBadge: React.FC<{ status: string }> = ({ status }) => (
+  <span
+    className={`rounded-full px-2 py-1 text-[11px] font-bold ${
+      statusClass[status] ?? 'bg-slate-100 text-slate-600'
+    }`}
+  >
+    {statusLabel[status] ?? status}
+  </span>
+);
+
+
+export const ExchangeManager: React.FC<ExchangeManagerProps> = ({
+  currentUser,
+  stockItems,
+}) => {
+  const [panel, setPanel] = useState<Panel>('marketplace');
+
+  const queryClient = useQueryClient();
+
+  const offersQuery = useQuery({
+    queryKey: ['exchange', 'offers'],
+    queryFn: getExchangeOffers,
+    refetchInterval: 7000,
+    refetchIntervalInBackground: false,
+  });
+
+  const myOffersQuery = useQuery({
+    queryKey: ['exchange', 'offers', 'mine'],
+    queryFn: getMyExchangeOffers,
+    refetchInterval: 7000,
+    refetchIntervalInBackground: false,
+  });
+
+  const ordersQuery = useQuery({
+    queryKey: ['exchange', 'orders'],
+    queryFn: getExchangeOrders,
+    refetchInterval: 7000,
+    refetchIntervalInBackground: false,
+  });
+
+  const offers = offersQuery.data ?? [];
+  const myOffers = myOffersQuery.data ?? [];
+  const orders = ordersQuery.data ?? [];
+
+  const loading =
+    offersQuery.isPending ||
+    myOffersQuery.isPending ||
+    ordersQuery.isPending;
+
+  const queryError =
+    offersQuery.error ??
+    myOffersQuery.error ??
+    ordersQuery.error;
+
+  const [actionId, setActionId] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const [showOfferForm, setShowOfferForm] = useState(false);
+  const [offerStockItemId, setOfferStockItemId] = useState('');
+  const [offerQuantity, setOfferQuantity] = useState('');
+  const [offerUnitPrice, setOfferUnitPrice] = useState('');
+  const [offerExpiresAt, setOfferExpiresAt] = useState('');
+
+  const [buyOffer, setBuyOffer] = useState<ExchangeOffer | null>(null);
+  const [buyQuantity, setBuyQuantity] = useState('');
+
+  const canMutate = currentUser.role === 'PHARMACY_OWNER';
+  const isAdmin = currentUser.role === 'PLATFORM_ADMIN';
+
+  const availableStockItems = useMemo(
+    () =>
+      stockItems.filter(
+        (item) => item.currentStock - item.reservedStock > 0,
+      ),
+    [stockItems],
+  );
+
+  const resetMessages = () => {
+    setError('');
+    setSuccess('');
+  };
+
+  const refreshExchangeData = async () => {
+    setError('');
+
+    await Promise.all([
+      offersQuery.refetch(),
+      myOffersQuery.refetch(),
+      ordersQuery.refetch(),
+    ]);
+  };
+
+  const invalidateExchangeData = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ['exchange', 'offers'],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['exchange', 'offers', 'mine'],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ['exchange', 'orders'],
+      }),
+    ]);
+  };
+
+  const handleCreateOffer = async (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
+    resetMessages();
+
+    if (!offerStockItemId) {
+      setError('یک قلم موجودی انتخاب کنید.');
+      return;
+    }
+
+    const quantity = Number(offerQuantity);
+    const unitPrice = Number(offerUnitPrice);
+
+    const stock = stockItems.find(
+      (item) => item.id === offerStockItemId,
+    );
+
+    if (!stock) {
+      setError('قلم موجودی انتخاب‌شده پیدا نشد.');
+      return;
+    }
+
+    const available =
+      stock.currentStock - stock.reservedStock;
+
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      setError('تعداد باید حداقل ۱ باشد.');
+      return;
+    }
+
+    if (quantity > available) {
+      setError(`حداکثر موجودی قابل عرضه ${available} عدد است.`);
+      return;
+    }
+
+    if (!Number.isInteger(unitPrice) || unitPrice < 0) {
+      setError('قیمت واحد نامعتبر است.');
+      return;
+    }
+
+    if (!offerExpiresAt) {
+      setError('تاریخ و ساعت انقضا الزامی است.');
+      return;
+    }
+
+    const expiresAt = new Date(offerExpiresAt);
+
+    if (Number.isNaN(expiresAt.getTime())) {
+      setError('تاریخ و ساعت انقضا نامعتبر است.');
+      return;
+    }
+
+    if (expiresAt.getTime() <= Date.now()) {
+      setError('تاریخ و ساعت انقضا باید در آینده باشد.');
+      return;
+    }
+
+    setActionId('create-offer');
+
+    try {
+      await createExchangeOffer({
+        stockItemId: offerStockItemId,
+        quantity,
+        unitPrice,
+        expiresAt: expiresAt.toISOString(),
+      });
+
+      setSuccess('پیشنهاد فروش با موفقیت ایجاد شد.');
+      setShowOfferForm(false);
+      setOfferStockItemId('');
+      setOfferQuantity('');
+      setOfferUnitPrice('');
+      setOfferExpiresAt('');
+      await invalidateExchangeData();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'ایجاد پیشنهاد ناموفق بود.',
+      );
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const handleBuy = async () => {
+    if (!buyOffer) return;
+
+    resetMessages();
+
+    const quantity = Number(buyQuantity);
+
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      setError('تعداد سفارش نامعتبر است.');
+      return;
+    }
+
+    if (quantity > buyOffer.remainingQuantity) {
+      setError(
+        `حداکثر مقدار قابل سفارش ${buyOffer.remainingQuantity} عدد است.`,
+      );
+      return;
+    }
+
+    setActionId(`buy-${buyOffer.id}`);
+
+    try {
+      await createExchangeOrder({
+        offerId: buyOffer.id,
+        quantity,
+      });
+
+      setSuccess('سفارش با موفقیت ثبت شد.');
+      setBuyOffer(null);
+      setBuyQuantity('');
+      await invalidateExchangeData();
+      setPanel('orders');
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'ثبت سفارش ناموفق بود.',
+      );
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const handleCancelOffer = async (id: string) => {
+    resetMessages();
+    setActionId(`cancel-offer-${id}`);
+
+    try {
+      await cancelExchangeOffer(id);
+      setSuccess('پیشنهاد لغو شد.');
+      await invalidateExchangeData();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'لغو پیشنهاد ناموفق بود.',
+      );
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const handleAcceptOrder = async (id: string) => {
+    resetMessages();
+    setActionId(`accept-${id}`);
+
+    try {
+      await acceptExchangeOrder(id);
+      setSuccess('سفارش تأیید شد.');
+      await invalidateExchangeData();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'تأیید سفارش ناموفق بود.',
+      );
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const handleShipOrder = async (id: string) => {
+    resetMessages();
+    setActionId(`ship-${id}`);
+
+    try {
+      await shipExchangeOrder(id);
+      setSuccess('سفارش ارسال شد.');
+      await invalidateExchangeData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'ارسال سفارش ناموفق بود.');
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const handleReceiveOrder = async (id: string) => {
+    resetMessages();
+    setActionId(`receive-${id}`);
+
+    try {
+      await receiveExchangeOrder(id);
+      setSuccess('دریافت سفارش ثبت شد.');
+      await invalidateExchangeData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'ثبت دریافت سفارش ناموفق بود.');
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const handleCompleteOrder = async (id: string) => {
+    resetMessages();
+    setActionId(`complete-${id}`);
+
+    try {
+      await completeExchangeOrder(id);
+      setSuccess('سفارش با موفقیت تکمیل شد.');
+      await invalidateExchangeData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تکمیل سفارش ناموفق بود.');
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const handleCancelOrder = async (id: string) => {
+    resetMessages();
+    setActionId(`cancel-order-${id}`);
+
+    try {
+      await cancelExchangeOrder(id);
+      setSuccess('سفارش لغو شد.');
+      await invalidateExchangeData();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'لغو سفارش ناموفق بود.',
+      );
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-2xl border border-emerald-800 bg-gradient-to-l from-emerald-950 via-emerald-900 to-slate-900 p-5 shadow-sm">
+        <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+          <div>
+            <div className="flex items-center gap-2">
+              <ArrowLeftRight className="h-6 w-6 text-emerald-300" />
+              <h2 className="text-xl font-extrabold text-white">
+                تبادل B2B بین داروخانه‌ای
+              </h2>
+            </div>
+
+            <p className="mt-1 text-sm text-emerald-100">
+              بازار واقعی پیشنهادها و سفارش‌ها متصل به backend
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void refreshExchangeData()}
+              disabled={loading}
+              className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              <RefreshCw
+                className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`}
+              />
+              بروزرسانی
+            </button>
+
+            {canMutate && (
+              <button
+                type="button"
+                onClick={() => {
+                  resetMessages();
+                  setShowOfferForm(true);
+                }}
+                className="flex items-center gap-2 rounded-xl bg-medical-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-medical-700"
+              >
+                <Plus className="h-4 w-4" />
+                ایجاد پیشنهاد فروش
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {(error || success || queryError) && (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm font-medium ${
+            error
+              ? 'border-rose-200 bg-rose-50 text-rose-700'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span>
+              {error ||
+                success ||
+                (queryError instanceof Error
+                  ? queryError.message
+                  : 'خطا در دریافت اطلاعات تبادل')}
+            </span>
+            <button
+              type="button"
+              onClick={resetMessages}
+              className="opacity-60 hover:opacity-100"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2 overflow-x-auto border-b border-slate-200 pb-2">
+        {[
+          ['marketplace', 'بازار پیشنهادها', Store],
+          ['mine', 'پیشنهادهای من', Package],
+          ['orders', 'سفارش‌ها', ShoppingCart],
+        ].map(([id, label, Icon]) => (
+          <button
+            key={id as string}
+            type="button"
+            onClick={() => setPanel(id as Panel)}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-bold ${
+              panel === id
+                ? 'bg-medical-600 text-white'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <Icon className="h-4 w-4" />
+            {label as string}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="flex min-h-64 items-center justify-center rounded-2xl border border-slate-200 bg-white">
+          <div className="flex items-center gap-2 text-sm text-slate-500">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            در حال دریافت اطلاعات...
+          </div>
+        </div>
+      ) : (
+        <>
+          {panel === 'marketplace' && (
+            <div className="grid gap-4 lg:grid-cols-2">
+              {offers.length === 0 ? (
+                <EmptyState text="در حال حاضر پیشنهاد فعالی از داروخانه‌های دیگر وجود ندارد." />
+              ) : (
+                offers.map((offer) => (
+                  <OfferCard
+                    key={offer.id}
+                    offer={offer}
+                    canBuy={canMutate}
+                    actionId={actionId}
+                    onBuy={() => {
+                      resetMessages();
+                      setBuyOffer(offer);
+                      setBuyQuantity('1');
+                    }}
+                  />
+                ))
+              )}
+            </div>
+          )}
+
+          {panel === 'mine' && (
+            <div className="grid gap-4 lg:grid-cols-2">
+              {myOffers.length === 0 ? (
+                <EmptyState text="هنوز پیشنهادی ایجاد نکرده‌اید." />
+              ) : (
+                myOffers.map((offer) => (
+                  <MyOfferCard
+                    key={offer.id}
+                    offer={offer}
+                    actionId={actionId}
+                    canCancel={canMutate || isAdmin}
+                    onCancel={() => handleCancelOffer(offer.id)}
+                  />
+                ))
+              )}
+            </div>
+          )}
+
+          {panel === 'orders' && (
+            <div className="space-y-3">
+              {orders.length === 0 ? (
+                <EmptyState text="هنوز سفارشی ثبت نشده است." />
+              ) : (
+                orders.map((order) => (
+                  <OrderCard
+                    key={order.id}
+                    order={order}
+                    currentUser={currentUser}
+                    actionId={actionId}
+                    onAccept={() => handleAcceptOrder(order.id)}
+                    onCancel={() => handleCancelOrder(order.id)}
+                    onShip={() => handleShipOrder(order.id)}
+                    onReceive={() => handleReceiveOrder(order.id)}
+                    onComplete={() => handleCompleteOrder(order.id)}
+                  />
+                ))
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {showOfferForm && (
+        <Modal onClose={() => setShowOfferForm(false)}>
+          <form onSubmit={handleCreateOffer} className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-extrabold text-slate-900">
+                ایجاد پیشنهاد فروش
+              </h3>
+
+              <button
+                type="button"
+                onClick={() => setShowOfferForm(false)}
+                className="text-slate-400 hover:text-slate-700"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <label className="block">
+              <span className="mb-1 block text-xs font-bold text-slate-600">
+                موجودی
+              </span>
+
+              <select
+                value={offerStockItemId}
+                onChange={(event) =>
+                  setOfferStockItemId(event.target.value)
+                }
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
+                required
+              >
+                <option value="">انتخاب کنید</option>
+                {availableStockItems.map((item) => {
+                  const available =
+                    item.currentStock - item.reservedStock;
+
+                  return (
+                    <option key={item.id} value={item.id}>
+                      {item.product.name} — موجودی قابل عرضه: {available}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label>
+                <span className="mb-1 block text-xs font-bold text-slate-600">
+                  تعداد
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  value={offerQuantity}
+                  onChange={(event) =>
+                    setOfferQuantity(event.target.value)
+                  }
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                  required
+                />
+              </label>
+
+              <label>
+                <span className="mb-1 block text-xs font-bold text-slate-600">
+                  قیمت واحد
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  value={offerUnitPrice}
+                  onChange={(event) =>
+                    setOfferUnitPrice(event.target.value)
+                  }
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+                  required
+                />
+              </label>
+            </div>
+
+            <label>
+              <span className="mb-1 block text-xs font-bold text-slate-600">
+                تاریخ انقضا — اختیاری
+              </span>
+              <input
+                type="datetime-local"
+                value={offerExpiresAt}
+                onChange={(event) =>
+                  setOfferExpiresAt(event.target.value)
+                }
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+              />
+            </label>
+
+            <button
+              type="submit"
+              disabled={actionId === 'create-offer'}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-medical-600 px-4 py-3 text-sm font-bold text-white hover:bg-medical-700 disabled:opacity-60"
+            >
+              {actionId === 'create-offer' && (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              )}
+              ایجاد پیشنهاد
+            </button>
+          </form>
+        </Modal>
+      )}
+
+      {buyOffer && (
+        <Modal onClose={() => setBuyOffer(null)}>
+          <div className="space-y-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-extrabold text-slate-900">
+                  ثبت سفارش
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  {buyOffer.stockItem.product.name}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setBuyOffer(null)}
+                className="text-slate-400 hover:text-slate-700"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-slate-50 p-3 text-sm">
+              <div className="flex justify-between">
+                <span>فروشنده</span>
+                <strong>{buyOffer.sellerPharmacy.name}</strong>
+              </div>
+              <div className="mt-2 flex justify-between">
+                <span>قیمت واحد</span>
+                <strong>
+                  {formatPrice(buyOffer.unitPrice)}
+                </strong>
+              </div>
+              <div className="mt-2 flex justify-between">
+                <span>مقدار قابل سفارش</span>
+                <strong>{buyOffer.remainingQuantity}</strong>
+              </div>
+            </div>
+
+            <label>
+              <span className="mb-1 block text-xs font-bold text-slate-600">
+                تعداد سفارش
+              </span>
+              <input
+                type="number"
+                min={1}
+                max={buyOffer.remainingQuantity}
+                value={buyQuantity}
+                onChange={(event) =>
+                  setBuyQuantity(event.target.value)
+                }
+                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={() => void handleBuy()}
+              disabled={actionId === `buy-${buyOffer.id}`}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-medical-600 px-4 py-3 text-sm font-bold text-white hover:bg-medical-700 disabled:opacity-60"
+            >
+              {actionId === `buy-${buyOffer.id}` && (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              )}
+              ثبت سفارش
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+const OfferCard: React.FC<{
+  offer: ExchangeOffer;
+  canBuy: boolean;
+  actionId: string | null;
+  onBuy: () => void;
+}> = ({ offer, canBuy, actionId, onBuy }) => (
+  <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <h3 className="font-extrabold text-slate-900">
+          {offer.stockItem.product.name}
+        </h3>
+        <p className="mt-1 text-xs text-slate-500">
+          {offer.stockItem.product.genericName} ·{' '}
+          {offer.stockItem.product.brand}
+        </p>
+      </div>
+
+      <span className="rounded-lg bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700">
+        {formatPrice(offer.unitPrice)} / واحد
+      </span>
+    </div>
+
+    <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+      <div className="rounded-lg bg-slate-50 p-2">
+        <span className="block text-slate-400">فروشنده</span>
+        <strong className="mt-1 block text-slate-700">
+          {offer.sellerPharmacy.name}
+        </strong>
+      </div>
+
+      <div className="rounded-lg bg-slate-50 p-2">
+        <span className="block text-slate-400">شهر</span>
+        <strong className="mt-1 block text-slate-700">
+          {offer.sellerPharmacy.city}
+        </strong>
+      </div>
+
+      <div className="rounded-lg bg-slate-50 p-2">
+        <span className="block text-slate-400">موجودی پیشنهاد</span>
+        <strong className="mt-1 block text-slate-700">
+          {offer.remainingQuantity}
+        </strong>
+      </div>
+
+      <div className="rounded-lg bg-slate-50 p-2">
+        <span className="block text-slate-400">انقضا</span>
+        <strong className="mt-1 block text-slate-700">
+          {formatDate(offer.expiresAt)}
+        </strong>
+      </div>
+    </div>
+
+    {canBuy && (
+      <button
+        type="button"
+        onClick={onBuy}
+        disabled={actionId !== null}
+        className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-medical-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-medical-700 disabled:opacity-50"
+      >
+        <ShoppingCart className="h-4 w-4" />
+        خرید
+      </button>
+    )}
+  </div>
+);
+
+const MyOfferCard: React.FC<{
+  offer: MyExchangeOffer;
+  actionId: string | null;
+  canCancel: boolean;
+  onCancel: () => void;
+  onShip: () => void;
+  onReceive: () => void;
+  onComplete: () => void;
+}> = ({ offer, actionId, canCancel, onCancel }) => (
+  <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <h3 className="font-extrabold text-slate-900">
+          {offer.stockItem.product.name}
+        </h3>
+        <p className="mt-1 text-xs text-slate-500">
+          بچ: {offer.stockItem.batchNumber}
+        </p>
+      </div>
+
+      <StatusBadge status={offer.status} />
+    </div>
+
+    <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
+      <div className="rounded-lg bg-slate-50 p-2 text-center">
+        <span className="block text-slate-400">کل</span>
+        <strong>{offer.quantity}</strong>
+      </div>
+
+      <div className="rounded-lg bg-emerald-50 p-2 text-center">
+        <span className="block text-emerald-600">باقی‌مانده</span>
+        <strong>{offer.remainingQuantity}</strong>
+      </div>
+
+      <div className="rounded-lg bg-slate-50 p-2 text-center">
+        <span className="block text-slate-400">قیمت</span>
+        <strong>{formatPrice(offer.unitPrice)}</strong>
+      </div>
+    </div>
+
+    {canCancel &&
+      (offer.status === 'ACTIVE' || offer.status === 'PAUSED') && (
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={actionId !== null}
+          className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-rose-200 px-4 py-2.5 text-xs font-bold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+        >
+          {actionId === `cancel-offer-${offer.id}` ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Ban className="h-4 w-4" />
+          )}
+          لغو پیشنهاد
+        </button>
+      )}
+  </div>
+);
+
+const OrderCard: React.FC<{
+  order: ExchangeOrder;
+  currentUser: MeResponse;
+  actionId: string | null;
+  onAccept: () => void;
+  onCancel: () => void;
+  onShip: () => void;
+  onReceive: () => void;
+  onComplete: () => void;
+}> = ({
+  order,
+  currentUser,
+  actionId,
+  onAccept,
+  onCancel,
+  onShip,
+  onReceive,
+  onComplete,
+}) => {
+  const isSeller =
+    currentUser.pharmacyId === order.sellerPharmacyId;
+
+  const isBuyer =
+    currentUser.pharmacyId === order.buyerPharmacyId;
+
+  const canAccept =
+    currentUser.role === 'PHARMACY_OWNER' &&
+    isSeller &&
+    order.status === 'PENDING';
+
+  const canShip =
+    currentUser.role === 'PHARMACY_OWNER' &&
+    isSeller &&
+    order.status === 'ACCEPTED';
+
+  const canReceive =
+    currentUser.role === 'PHARMACY_OWNER' &&
+    isBuyer &&
+    order.status === 'SHIPPED';
+
+  const canComplete =
+    currentUser.role === 'PHARMACY_OWNER' &&
+    isBuyer &&
+    order.status === 'RECEIVED';
+
+  const canCancel =
+    currentUser.role === 'PLATFORM_ADMIN' ||
+    (currentUser.role === 'PHARMACY_OWNER' &&
+      ((isBuyer && order.status === 'PENDING') ||
+        (isSeller &&
+          (order.status === 'PENDING' ||
+            order.status === 'ACCEPTED'))));
+
+  const steps = [
+    {
+      label: 'ثبت سفارش',
+      date: order.createdAt,
+      complete: true,
+    },
+    {
+      label: 'تأیید سفارش',
+      date:
+        order.status !== 'PENDING' &&
+        order.status !== 'CANCELLED'
+          ? order.updatedAt
+          : null,
+      complete: [
+        'ACCEPTED',
+        'SHIPPED',
+        'RECEIVED',
+        'COMPLETED',
+      ].includes(order.status),
+    },
+    {
+      label: 'ارسال',
+      date: order.transfer?.shippedAt ?? null,
+      complete: ['SHIPPED', 'RECEIVED', 'COMPLETED'].includes(
+        order.status,
+      ),
+    },
+    {
+      label: 'دریافت',
+      date: order.transfer?.receivedAt ?? null,
+      complete: ['RECEIVED', 'COMPLETED'].includes(
+        order.status,
+      ),
+    },
+    {
+      label: 'تکمیل',
+      date: order.transfer?.completedAt ?? null,
+      complete: order.status === 'COMPLETED',
+    },
+  ];
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
+        <div>
+          <div className="flex items-center gap-2">
+            <Package className="h-5 w-5 text-emerald-600" />
+            <h3 className="font-extrabold text-slate-900">
+              {order.offer.stockItem.product.name}
+            </h3>
+            <StatusBadge status={order.status} />
+          </div>
+
+          <p className="mt-1 text-xs text-slate-500">
+            سفارش {order.id.slice(0, 8)} ·{' '}
+            {formatDate(order.createdAt)}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="rounded-lg bg-slate-50 px-3 py-2">
+            تعداد: <strong>{order.quantity}</strong>
+          </span>
+
+          <span className="rounded-lg bg-slate-50 px-3 py-2">
+            قیمت واحد:{' '}
+            <strong>{formatPrice(order.agreedUnitPrice)}</strong>
+          </span>
+
+          {isSeller && (
+            <span className="rounded-lg bg-amber-50 px-3 py-2 font-bold text-amber-700">
+              فروشنده
+            </span>
+          )}
+
+          {isBuyer && (
+            <span className="rounded-lg bg-blue-50 px-3 py-2 font-bold text-blue-700">
+              خریدار
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-xs font-extrabold text-slate-700">
+            مسیر سفارش
+          </span>
+          <span className="text-[11px] text-slate-400">
+            وضعیت فعلی: {order.status}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+          {steps.map((step, index) => (
+            <div key={step.label} className="relative">
+              <div className="flex items-start gap-2">
+                <div
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 ${
+                    step.complete
+                      ? 'border-emerald-500 bg-emerald-500 text-white'
+                      : 'border-slate-300 bg-white text-slate-400'
+                  }`}
+                >
+                  {step.complete ? (
+                    <Check className="h-4 w-4" />
+                  ) : (
+                    <span className="text-[10px] font-bold">
+                      {index + 1}
+                    </span>
+                  )}
+                </div>
+
+                <div className="min-w-0">
+                  <p
+                    className={`text-xs font-bold ${
+                      step.complete
+                        ? 'text-slate-800'
+                        : 'text-slate-400'
+                    }`}
+                  >
+                    {step.label}
+                  </p>
+
+                  {step.date && (
+                    <p className="mt-1 text-[10px] text-slate-400">
+                      {formatDate(step.date)}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {order.status === 'CANCELLED' && (
+          <div className="mt-3 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-600">
+            این سفارش لغو شده است.
+          </div>
+        )}
+      </div>
+
+      {(canAccept ||
+        canShip ||
+        canReceive ||
+        canComplete ||
+        canCancel) && (
+        <div className="mt-4 grid gap-2 border-t border-slate-100 pt-3 sm:grid-cols-2">
+          {canAccept && (
+            <button
+              type="button"
+              onClick={onAccept}
+              disabled={actionId !== null}
+              className="flex items-center justify-center gap-2 rounded-xl bg-medical-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-medical-700 disabled:opacity-50"
+            >
+              {actionId === `accept-${order.id}` ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              تأیید سفارش
+            </button>
+          )}
+
+          {canShip && (
+            <button
+              type="button"
+              onClick={onShip}
+              disabled={actionId !== null}
+              className="flex items-center justify-center gap-2 rounded-xl bg-medical-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-medical-700 disabled:opacity-50"
+            >
+              {actionId === `ship-${order.id}` ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Package className="h-4 w-4" />
+              )}
+              ثبت ارسال
+            </button>
+          )}
+
+          {canReceive && (
+            <button
+              type="button"
+              onClick={onReceive}
+              disabled={actionId !== null}
+              className="flex items-center justify-center gap-2 rounded-xl bg-medical-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-medical-700 disabled:opacity-50"
+            >
+              {actionId === `receive-${order.id}` ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              ثبت دریافت
+            </button>
+          )}
+
+          {canComplete && (
+            <button
+              type="button"
+              onClick={onComplete}
+              disabled={actionId !== null}
+              className="flex items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-50"
+            >
+              {actionId === `complete-${order.id}` ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              تکمیل سفارش
+            </button>
+          )}
+
+          {canCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={actionId !== null}
+              className="flex items-center justify-center gap-2 rounded-xl border border-rose-200 px-4 py-2.5 text-xs font-bold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+            >
+              {actionId === `cancel-order-${order.id}` ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Ban className="h-4 w-4" />
+              )}
+              لغو سفارش
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const EmptyState: React.FC<{ text: string }> = ({ text }) => (
+  <div className="flex min-h-40 items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500 lg:col-span-2">
+    <div>
+      <Clock3 className="mx-auto mb-2 h-6 w-6 text-slate-400" />
+      {text}
+    </div>
+  </div>
+);
+
+const Modal: React.FC<{
+  children: React.ReactNode;
+  onClose: () => void;
+}> = ({ children, onClose }) => (
+  <div
+    className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
+    onMouseDown={(event) => {
+      if (event.target === event.currentTarget) {
+        onClose();
+      }
+    }}
+  >
+    <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl">
+      {children}
+    </div>
+  </div>
+);

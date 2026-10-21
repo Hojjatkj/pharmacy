@@ -1,0 +1,8 @@
+{
+  "name": "طرح عملیاتی و پلتفرم داروخانه‌ای فارماکانکت",
+  "description": "طرح عملیاتی پیاده‌سازی سامانه فروش و تبادل بین داروخانه‌ای با هوش مصنوعی، مدیریت موجودی انقضا-محور و پرداخت امن",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

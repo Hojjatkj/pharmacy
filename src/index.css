@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@theme {
+  /* Medical Teal */
+  --color-medical-50: #effafb;
+  --color-medical-100: #d8f2f3;
+  --color-medical-200: #b5e6e9;
+  --color-medical-300: #82d4d9;
+  --color-medical-400: #45b9c2;
+  --color-medical-500: #1699a5;
+  --color-medical-600: #087f8c;
+  --color-medical-700: #096671;
+  --color-medical-800: #0b535c;
+  --color-medical-900: #0b454c;
+  --color-medical-950: #052b30;
+
+  /* Typography */
+  --font-sans: "Vazirmatn", ui-sans-serif, system-ui, sans-serif;
+
+  /* Surface and border tokens */
+  --color-surface: #ffffff;
+  --color-page: #f7fafb;
+  --color-border-soft: #e5edef;
+
+  /* Consistent shadows */
+  --shadow-card: 0 2px 12px rgb(15 55 65 / 5%);
+  --shadow-card-hover: 0 8px 24px rgb(8 127 140 / 10%);
+}
+
+:root {
+  font-family: "Vazirmatn", ui-sans-serif, system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  color: #243746;
+  background: #f7fafb;
+}
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  font-family: "Vazirmatn", ui-sans-serif, system-ui, sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  color: #052b30;
+  background: #b5e6e9;
+}

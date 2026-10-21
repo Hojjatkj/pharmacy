@@ -1,0 +1,1999 @@
+import React, { useMemo, useState } from 'react';
+import {
+  AlertTriangle,
+  ArrowDownUp,
+  Boxes,
+  CalendarClock,
+  Check,
+  CircleDollarSign,
+  Download,
+  FileSpreadsheet,
+  Info,
+  PackageCheck,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  Sparkles,
+  Trash2,
+  TrendingUp,
+} from 'lucide-react';
+
+import {
+  Pharmacy,
+  PharmacyStockItem,
+  ProductItem,
+} from '../types';
+
+import { MeResponse } from '../api/auth';
+
+import {
+  createInventoryItem,
+  CreateStockItemPayload,
+  deleteInventoryItem,
+  downloadInventoryImportTemplate,
+  importInventoryExcel,
+  updateInventoryItem,
+  UpdateStockItemPayload,
+} from '../api/inventory';
+
+interface InventoryManagerProps {
+  stockItems: PharmacyStockItem[];
+  activePharmacy: Pharmacy;
+  pharmacies: Pharmacy[];
+  currentUser: MeResponse;
+  products: ProductItem[];
+  onAddStockItem: (item: PharmacyStockItem) => void;
+  onUpdateStockItem: (item: PharmacyStockItem) => void;
+  onDeleteStockItem: (id: string) => void;
+  onPushToExchange: (item: PharmacyStockItem) => void;
+  onPharmacyChange: (pharmacy: Pharmacy) => void;
+  onRefreshInventory: (
+    pharmacyId?: string,
+  ) => Promise<void>;
+}
+
+type RiskFilter =
+  | 'all'
+  | 'critical'
+  | 'warning'
+  | 'optimal'
+  | 'low_stock';
+
+type StockFilter =
+  | 'all'
+  | 'available'
+  | 'low'
+  | 'empty';
+
+type ExpiryFilter =
+  | 'all'
+  | 'lt30'
+  | '30to90'
+  | 'gt90';
+
+type SortField =
+  | 'name'
+  | 'stock'
+  | 'available'
+  | 'velocity'
+  | 'coverage'
+  | 'expiry'
+  | 'value';
+
+type SortDirection = 'asc' | 'desc';
+
+interface FormState {
+  productId: string;
+  batchNumber: string;
+  expiryDate: string;
+  currentStock: number;
+  dailySalesVelocity: number;
+  originalCost: number;
+  sellingPrice: number;
+  minAcceptablePriceB2B: number;
+}
+
+function toDateInputValue(value: string) {
+  return value.slice(0, 10);
+}
+
+function createEmptyForm(
+  products: ProductItem[],
+): FormState {
+  const product = products[0];
+
+  return {
+    productId: product?.id ?? '',
+    batchNumber: '',
+    expiryDate: '',
+    currentStock: 1,
+    dailySalesVelocity: 0,
+    originalCost: 0,
+    sellingPrice: product?.basePrice ?? 0,
+    minAcceptablePriceB2B: 0,
+  };
+}
+
+function MetricCard({
+  icon,
+  label,
+  value,
+  tone,
+  suffix = '',
+  decimals = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number | string;
+  tone: 'slate' | 'emerald' | 'blue' | 'amber' | 'violet';
+  suffix?: string;
+  decimals?: boolean;
+}) {
+  const tones = {
+    slate:
+      'border-slate-200 bg-white text-slate-700',
+    emerald:
+      'border-emerald-200 bg-emerald-50/60 text-emerald-700',
+    blue:
+      'border-blue-200 bg-blue-50/60 text-blue-700',
+    amber:
+      'border-amber-200 bg-amber-50/60 text-amber-700',
+    violet:
+      'border-violet-200 bg-violet-50/60 text-violet-700',
+  };
+
+  const displayValue =
+    typeof value === 'number'
+      ? new Intl.NumberFormat('fa-IR', {
+          maximumFractionDigits: decimals ? 1 : 0,
+        }).format(value)
+      : value;
+
+  return (
+    <div
+      className={`rounded-2xl border p-4 shadow-sm ${tones[tone]}`}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-bold opacity-70">
+          {label}
+        </span>
+
+        <span className="opacity-80">
+          {icon}
+        </span>
+      </div>
+
+      <div className="mt-2 truncate text-xl font-black">
+        {displayValue}
+        {suffix && (
+          <span className="mr-1 text-[10px] font-bold opacity-60">
+            {suffix}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RiskSummary({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: number;
+  className: string;
+}) {
+  return (
+    <div
+      className={`rounded-xl border p-3 shadow-sm ${className}`}
+    >
+      <span className="text-[10px] font-bold">
+        {label}
+      </span>
+
+      <span className="mt-1 block text-lg font-black">
+        {new Intl.NumberFormat('fa-IR').format(value)}
+      </span>
+    </div>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<[string, string]>;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-[10px] font-bold text-slate-400">
+        {label}
+      </span>
+
+      <select
+        value={value}
+        onChange={(event) =>
+          onChange(event.target.value)
+        }
+        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-700 outline-none focus:border-medical-500 focus:ring-2 focus:ring-medical-100"
+      >
+        {options.map(([optionValue, optionLabel]) => (
+          <option
+            key={optionValue}
+            value={optionValue}
+          >
+            {optionLabel}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function SortableHeader({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <th className="px-3 py-3">
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex items-center gap-1 font-bold text-slate-500 transition hover:text-emerald-700"
+      >
+        {label}
+        <ArrowDownUp className="h-3 w-3 opacity-50" />
+      </button>
+    </th>
+  );
+}
+
+export const InventoryManager: React.FC<
+  InventoryManagerProps
+> = ({
+  stockItems,
+  activePharmacy,
+  pharmacies,
+  currentUser,
+  products,
+  onAddStockItem,
+  onUpdateStockItem,
+  onDeleteStockItem,
+  onPushToExchange,
+  onPharmacyChange,
+  onRefreshInventory,
+}) => {
+  const canManageInventory =
+    currentUser.role === 'SUPER_ADMIN' ||
+    currentUser.role === 'PHARMACY_OWNER';
+
+  const canSelectPharmacy =
+    currentUser.role === 'SUPER_ADMIN' ||
+    currentUser.role === 'PLATFORM_ADMIN';
+
+  const [filterRisk, setFilterRisk] =
+    useState<RiskFilter>('all');
+
+  const [searchQuery, setSearchQuery] =
+    useState('');
+
+  const [filterCategory, setFilterCategory] =
+    useState('all');
+
+  const [filterStock, setFilterStock] =
+    useState<StockFilter>('all');
+
+  const [filterExpiry, setFilterExpiry] =
+    useState<ExpiryFilter>('all');
+
+  const [sortField, setSortField] =
+    useState<SortField>('name');
+
+  const [sortDirection, setSortDirection] =
+    useState<SortDirection>('asc');
+
+  const [showAdvancedFilters, setShowAdvancedFilters] =
+    useState(false);
+
+  const [showModal, setShowModal] =
+    useState(false);
+
+  const [editingItem, setEditingItem] =
+    useState<PharmacyStockItem | null>(null);
+
+  const [form, setForm] = useState<FormState>(
+    () => createEmptyForm(products),
+  );
+
+  const [saving, setSaving] =
+    useState(false);
+
+  const [deletingId, setDeletingId] =
+    useState<string | null>(null);
+
+  const [pushedId, setPushedId] =
+    useState<string | null>(null);
+
+  const [importingExcel, setImportingExcel] =
+    useState(false);
+
+  const [downloadingTemplate, setDownloadingTemplate] =
+    useState(false);
+
+  const [importInputKey, setImportInputKey] =
+    useState(0);
+
+  const [error, setError] =
+    useState<string | null>(null);
+
+  const [success, setSuccess] =
+    useState<string | null>(null);
+
+  const inventoryMetrics = useMemo(() => {
+    const totalUnits = stockItems.reduce(
+      (sum, item) => sum + item.currentStock,
+      0,
+    );
+
+    const reservedUnits = stockItems.reduce(
+      (sum, item) => sum + item.reservedStock,
+      0,
+    );
+
+    const availableUnits = stockItems.reduce(
+      (sum, item) =>
+        sum +
+        Math.max(
+          0,
+          item.currentStock - item.reservedStock,
+        ),
+      0,
+    );
+
+    const dailyVelocity = stockItems.reduce(
+      (sum, item) =>
+        sum + item.dailySalesVelocity,
+      0,
+    );
+
+    const inventoryValue = stockItems.reduce(
+      (sum, item) =>
+        sum +
+        item.currentStock * item.originalCost,
+      0,
+    );
+
+    return {
+      itemCount: stockItems.length,
+      totalUnits,
+      reservedUnits,
+      availableUnits,
+      dailyVelocity,
+      inventoryValue,
+      critical: stockItems.filter(
+        (item) => item.riskLevel === 'critical',
+      ).length,
+      warning: stockItems.filter(
+        (item) => item.riskLevel === 'warning',
+      ).length,
+      lowStock: stockItems.filter(
+        (item) => item.riskLevel === 'low_stock',
+      ).length,
+    };
+  }, [stockItems]);
+
+  const filteredItems = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    const result = stockItems.filter((item) => {
+      const available = Math.max(
+        0,
+        item.currentStock - item.reservedStock,
+      );
+
+      const matchesSearch =
+        !query ||
+        [
+          item.product.name,
+          item.product.genericName,
+          item.product.brand,
+          item.product.ircCode,
+          item.product.gtin,
+          item.batchNumber,
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(query);
+
+      const matchesRisk =
+        filterRisk === 'all' ||
+        item.riskLevel === filterRisk;
+
+      const matchesCategory =
+        filterCategory === 'all' ||
+        item.product.category === filterCategory;
+
+      const matchesStock =
+        filterStock === 'all' ||
+        (filterStock === 'available' &&
+          available > 0) ||
+        (filterStock === 'low' &&
+          item.currentStock > 0 &&
+          item.currentStock <= 10) ||
+        (filterStock === 'empty' &&
+          item.currentStock <= 0);
+
+      const matchesExpiry =
+        filterExpiry === 'all' ||
+        (filterExpiry === 'lt30' &&
+          item.daysToExpiry < 30) ||
+        (filterExpiry === '30to90' &&
+          item.daysToExpiry >= 30 &&
+          item.daysToExpiry <= 90) ||
+        (filterExpiry === 'gt90' &&
+          item.daysToExpiry > 90);
+
+      return (
+        matchesSearch &&
+        matchesRisk &&
+        matchesCategory &&
+        matchesStock &&
+        matchesExpiry
+      );
+    });
+
+    result.sort((a, b) => {
+      let left: string | number;
+      let right: string | number;
+
+      switch (sortField) {
+        case 'stock':
+          left = a.currentStock;
+          right = b.currentStock;
+          break;
+
+        case 'available':
+          left = Math.max(
+            0,
+            a.currentStock - a.reservedStock,
+          );
+          right = Math.max(
+            0,
+            b.currentStock - b.reservedStock,
+          );
+          break;
+
+        case 'velocity':
+          left = a.dailySalesVelocity;
+          right = b.dailySalesVelocity;
+          break;
+
+        case 'coverage':
+          left =
+            a.daysOfInventoryLeft ?? -1;
+          right =
+            b.daysOfInventoryLeft ?? -1;
+          break;
+
+        case 'expiry':
+          left = a.daysToExpiry;
+          right = b.daysToExpiry;
+          break;
+
+        case 'value':
+          left =
+            a.currentStock * a.originalCost;
+          right =
+            b.currentStock * b.originalCost;
+          break;
+
+        case 'name':
+        default:
+          left = a.product.name;
+          right = b.product.name;
+          break;
+      }
+
+      if (
+        typeof left === 'string' &&
+        typeof right === 'string'
+      ) {
+        const comparison =
+          left.localeCompare(
+            right,
+            'fa',
+            { sensitivity: 'base' },
+          );
+
+        return sortDirection === 'asc'
+          ? comparison
+          : -comparison;
+      }
+
+      const comparison =
+        Number(left) - Number(right);
+
+      return sortDirection === 'asc'
+        ? comparison
+        : -comparison;
+    });
+
+    return result;
+  }, [
+    stockItems,
+    searchQuery,
+    filterRisk,
+    filterCategory,
+    filterStock,
+    filterExpiry,
+    sortField,
+    sortDirection,
+  ]);
+
+  const hasActiveFilters =
+    Boolean(searchQuery.trim()) ||
+    filterRisk !== 'all' ||
+    filterCategory !== 'all' ||
+    filterStock !== 'all' ||
+    filterExpiry !== 'all';
+
+  const categoryLabels: Record<string, string> = {
+    supplement: 'مکمل',
+    cosmetic: 'آرایشی',
+    otc_health: 'OTC / سلامت',
+    sports_nutrition: 'تغذیه ورزشی',
+  };
+
+  function formatMoney(value: number) {
+    return new Intl.NumberFormat('fa-IR').format(
+      Math.round(value),
+    );
+  }
+
+  function resetInventoryFilters() {
+    setSearchQuery('');
+    setFilterRisk('all');
+    setFilterCategory('all');
+    setFilterStock('all');
+    setFilterExpiry('all');
+    setSortField('name');
+    setSortDirection('asc');
+  }
+
+  function toggleSort(field: SortField) {
+    if (sortField === field) {
+      setSortDirection((current) =>
+        current === 'asc' ? 'desc' : 'asc',
+      );
+      return;
+    }
+
+    setSortField(field);
+    setSortDirection('asc');
+  }
+
+
+  function resetForm() {
+    setForm(createEmptyForm(products));
+  }
+
+  function openCreateModal() {
+    if (!canManageInventory) return;
+
+    setEditingItem(null);
+    resetForm();
+    setError(null);
+    setSuccess(null);
+    setShowModal(true);
+  }
+
+  function openEditModal(item: PharmacyStockItem) {
+    if (!canManageInventory) return;
+
+    setEditingItem(item);
+
+    setForm({
+      productId: item.productId,
+      batchNumber: item.batchNumber,
+      expiryDate: toDateInputValue(
+        item.expiryDate,
+      ),
+      currentStock: item.currentStock,
+      dailySalesVelocity:
+        item.dailySalesVelocity,
+      originalCost: item.originalCost,
+      sellingPrice: item.sellingPrice,
+      minAcceptablePriceB2B:
+        item.minAcceptablePriceB2B,
+    });
+
+    setError(null);
+    setSuccess(null);
+    setShowModal(true);
+  }
+
+  function closeModal() {
+    if (saving) return;
+
+    setShowModal(false);
+    setEditingItem(null);
+    setError(null);
+  }
+
+  function updateForm(
+    patch: Partial<FormState>,
+  ) {
+    setForm((current) => ({
+      ...current,
+      ...patch,
+    }));
+  }
+
+  async function handleSubmit(
+    event: React.FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault();
+
+    if (!form.productId) {
+      setError('لطفاً محصول را انتخاب کنید.');
+      return;
+    }
+
+    if (!form.batchNumber.trim()) {
+      setError('شماره بچ الزامی است.');
+      return;
+    }
+
+    if (!form.expiryDate) {
+      setError('تاریخ انقضا الزامی است.');
+      return;
+    }
+
+    if (form.currentStock < 0) {
+      setError('موجودی نمی‌تواند منفی باشد.');
+      return;
+    }
+
+    if (
+      form.dailySalesVelocity < 0 ||
+      form.originalCost < 0 ||
+      form.sellingPrice < 0 ||
+      form.minAcceptablePriceB2B < 0
+    ) {
+      setError(
+        'مقادیر عددی نمی‌توانند منفی باشند.',
+      );
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      if (editingItem) {
+        const payload: UpdateStockItemPayload = {
+          batchNumber:
+            form.batchNumber.trim(),
+          expiryDate: form.expiryDate,
+          currentStock:
+            form.currentStock,
+          dailySalesVelocity:
+            form.dailySalesVelocity,
+          originalCost:
+            form.originalCost,
+          sellingPrice:
+            form.sellingPrice,
+          minAcceptablePriceB2B:
+            form.minAcceptablePriceB2B,
+        };
+
+        const updated =
+          await updateInventoryItem(
+            editingItem.id,
+            payload,
+          );
+
+        onUpdateStockItem(updated);
+
+        setSuccess(
+          'موجودی با موفقیت ویرایش شد.',
+        );
+      } else {
+        const payload: CreateStockItemPayload = {
+          productId: form.productId,
+          batchNumber:
+            form.batchNumber.trim(),
+          expiryDate: form.expiryDate,
+          currentStock:
+            form.currentStock,
+          dailySalesVelocity:
+            form.dailySalesVelocity,
+          originalCost:
+            form.originalCost,
+          sellingPrice:
+            form.sellingPrice,
+          minAcceptablePriceB2B:
+            form.minAcceptablePriceB2B,
+        };
+
+        if (
+          currentUser.role === 'SUPER_ADMIN' ||
+          currentUser.role === 'PLATFORM_ADMIN'
+        ) {
+          payload.pharmacyId =
+            activePharmacy.id;
+        }
+
+        const created =
+          await createInventoryItem(
+            payload,
+          );
+
+        onAddStockItem(created);
+
+        setSuccess(
+          'بچ جدید با موفقیت در موجودی ثبت شد.',
+        );
+      }
+
+      setShowModal(false);
+      setEditingItem(null);
+      resetForm();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : editingItem
+            ? 'ویرایش موجودی انجام نشد.'
+            : 'ثبت موجودی انجام نشد.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(
+    item: PharmacyStockItem,
+  ) {
+    if (!canManageInventory) return;
+
+    const confirmed = window.confirm(
+      `آیا از حذف موجودی «${item.product.name}» با بچ ${item.batchNumber} مطمئن هستید؟`,
+    );
+
+    if (!confirmed) return;
+
+    setDeletingId(item.id);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await deleteInventoryItem(item.id);
+
+      onDeleteStockItem(item.id);
+
+      setSuccess(
+        'قلم موجودی با موفقیت حذف شد.',
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'حذف موجودی انجام نشد.',
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  async function handleDownloadTemplate() {
+    if (!canManageInventory) return;
+
+    setDownloadingTemplate(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const blob =
+        await downloadInventoryImportTemplate();
+
+      const url = window.URL.createObjectURL(blob);
+      const anchor =
+        document.createElement('a');
+
+      anchor.href = url;
+      anchor.download =
+        'phurmacy-inventory-template.xlsx';
+
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      window.URL.revokeObjectURL(url);
+
+      setSuccess(
+        'نمونه Excel با موفقیت دانلود شد.',
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'دانلود نمونه Excel انجام نشد.',
+      );
+    } finally {
+      setDownloadingTemplate(false);
+    }
+  }
+
+  async function handleExcelImport(
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+
+    event.target.value = '';
+
+    if (!file) return;
+
+    if (!canManageInventory) return;
+
+    setImportingExcel(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      if (
+        !file.name
+          .toLowerCase()
+          .endsWith('.xlsx')
+      ) {
+        throw new Error(
+          'فقط فایل Excel با پسوند .xlsx قابل import است.',
+        );
+      }
+
+      if (
+        file.size >
+        5 * 1024 * 1024
+      ) {
+        throw new Error(
+          'حجم فایل نباید بیشتر از 5 مگابایت باشد.',
+        );
+      }
+
+      const result =
+        await importInventoryExcel(
+          file,
+          canSelectPharmacy
+            ? activePharmacy.id
+            : undefined,
+        );
+
+      await onRefreshInventory(
+        activePharmacy.id,
+      );
+
+      setSuccess(
+        `${result.imported} قلم از ${result.totalRows} ردیف Excel با موفقیت وارد شد.`,
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Import فایل Excel انجام نشد.',
+      );
+
+      setImportInputKey(
+        (current) => current + 1,
+      );
+    } finally {
+      setImportingExcel(false);
+    }
+  }
+
+  function handlePush(
+    item: PharmacyStockItem,
+  ) {
+    onPushToExchange(item);
+    setPushedId(item.id);
+
+    window.setTimeout(() => {
+      setPushedId(null);
+    }, 2500);
+  }
+
+  return (
+    <div
+      className="space-y-6 pb-12"
+      id="inventory-manager-view"
+      dir="rtl"
+    >
+      {/* Header */}
+      <div className="flex flex-col gap-4 rounded-2xl border border-emerald-800 bg-gradient-to-l from-emerald-950 via-emerald-900 to-slate-900 p-5 shadow-sm lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <Boxes className="h-6 w-6 text-emerald-300" />
+
+            <h1 className="text-2xl font-black text-white">
+              مدیریت موجودی
+            </h1>
+          </div>
+
+          <p className="mt-2 text-sm text-emerald-100">
+            موجودی واقعی ثبت‌شده در Backend داروخانه
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {canSelectPharmacy && (
+            <select
+              value={activePharmacy.id}
+              onChange={(event) => {
+                const pharmacy =
+                  pharmacies.find(
+                    (item) =>
+                      item.id ===
+                      event.target.value,
+                  );
+
+                if (pharmacy) {
+                  onPharmacyChange(pharmacy);
+                }
+              }}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 outline-none focus:border-medical-500"
+            >
+              {pharmacies.map((pharmacy) => (
+                <option
+                  key={pharmacy.id}
+                  value={pharmacy.id}
+                >
+                  {pharmacy.name}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {canManageInventory && (
+            <>
+              <button
+                type="button"
+                onClick={() =>
+                  void handleDownloadTemplate()
+                }
+                disabled={
+                  downloadingTemplate ||
+                  importingExcel
+                }
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {downloadingTemplate ? (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-700" />
+                ) : (
+                  <Download className="h-4 w-4" />
+                )}
+                نمونه Excel
+              </button>
+
+              <label
+                className={`inline-flex cursor-pointer items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100 ${
+                  importingExcel
+                    ? 'cursor-not-allowed opacity-50'
+                    : ''
+                }`}
+              >
+                {importingExcel ? (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-200 border-t-emerald-700" />
+                ) : (
+                  <FileSpreadsheet className="h-4 w-4" />
+                )}
+
+                {importingExcel
+                  ? 'در حال Import...'
+                  : 'Import Excel'}
+
+                <input
+                  key={importInputKey}
+                  type="file"
+                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  className="hidden"
+                  disabled={importingExcel}
+                  onChange={(event) =>
+                    void handleExcelImport(event)
+                  }
+                />
+              </label>
+
+              <button
+                type="button"
+                onClick={openCreateModal}
+                disabled={
+                  products.length === 0 ||
+                  importingExcel
+                }
+                className="inline-flex items-center gap-2 rounded-xl bg-medical-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-medical-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Plus className="h-4 w-4" />
+                ثبت بچ جدید
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Messages */}
+      {success && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">
+          {success}
+        </div>
+      )}
+
+      {error && !showModal && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-bold text-rose-700">
+          {error}
+        </div>
+      )}
+
+      {/* Active pharmacy */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="text-xs font-bold text-slate-400">
+          داروخانه فعال
+        </div>
+
+        <div className="mt-1 text-base font-black text-slate-900">
+          {activePharmacy.name}
+        </div>
+
+        <div className="mt-1 text-xs text-slate-500">
+          {activePharmacy.city} —{' '}
+          {activePharmacy.licenseNumber}
+        </div>
+      </div>
+
+      {/* Operational KPI dashboard */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <MetricCard
+          icon={<Boxes className="h-4 w-4" />}
+          label="اقلام موجودی"
+          value={inventoryMetrics.itemCount}
+          tone="slate"
+        />
+
+        <MetricCard
+          icon={<PackageCheck className="h-4 w-4" />}
+          label="کل واحد"
+          value={inventoryMetrics.totalUnits}
+          tone="emerald"
+        />
+
+        <MetricCard
+          icon={<PackageCheck className="h-4 w-4" />}
+          label="موجودی آزاد"
+          value={inventoryMetrics.availableUnits}
+          tone="blue"
+        />
+
+        <MetricCard
+          icon={<RefreshCw className="h-4 w-4" />}
+          label="رزرو شده"
+          value={inventoryMetrics.reservedUnits}
+          tone="amber"
+        />
+
+        <MetricCard
+          icon={<TrendingUp className="h-4 w-4" />}
+          label="فروش روزانه"
+          value={inventoryMetrics.dailyVelocity}
+          tone="violet"
+          decimals
+        />
+
+        <MetricCard
+          icon={<CircleDollarSign className="h-4 w-4" />}
+          label="ارزش موجودی"
+          value={formatMoney(
+            inventoryMetrics.inventoryValue,
+          )}
+          tone="emerald"
+          suffix=" ریال"
+        />
+      </div>
+
+      {/* Risk summary */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <RiskSummary
+          label="بحرانی"
+          value={inventoryMetrics.critical}
+          className="border-rose-200 bg-rose-50/70 text-rose-700"
+        />
+
+        <RiskSummary
+          label="هشدار"
+          value={inventoryMetrics.warning}
+          className="border-amber-200 bg-amber-50/70 text-amber-700"
+        />
+
+        <RiskSummary
+          label="کسری"
+          value={inventoryMetrics.lowStock}
+          className="border-blue-200 bg-blue-50/70 text-blue-700"
+        />
+
+        <RiskSummary
+          label="نمایش فعلی"
+          value={filteredItems.length}
+          className="border-slate-200 bg-slate-50 text-slate-700"
+        />
+      </div>
+
+      {/* Search + filters */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+            <input
+              value={searchQuery}
+              onChange={(event) =>
+                setSearchQuery(event.target.value)
+              }
+              placeholder="جستجو: نام محصول، ژنریک، برند، IRC، GTIN یا شماره بچ..."
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pr-10 pl-3 text-xs font-medium text-slate-800 outline-none transition focus:border-medical-500 focus:bg-white focus:ring-2 focus:ring-medical-100"
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              setShowAdvancedFilters(
+                (current) => !current,
+              )
+            }
+            className={`inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-3 text-xs font-bold transition ${
+              showAdvancedFilters ||
+              hasActiveFilters
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            فیلترها
+          </button>
+
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={resetInventoryFilters}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-600 transition hover:bg-slate-50"
+            >
+              <RefreshCw className="h-4 w-4" />
+              پاک‌سازی
+            </button>
+          )}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="ml-1 text-[11px] font-bold text-slate-400">
+            ریسک:
+          </span>
+
+          {[
+            ['all', 'همه'],
+            ['critical', 'بحرانی'],
+            ['warning', 'هشدار'],
+            ['optimal', 'بهینه'],
+            ['low_stock', 'کسری'],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() =>
+                setFilterRisk(id as RiskFilter)
+              }
+              className={`rounded-lg px-3 py-1.5 text-[11px] font-bold transition ${
+                filterRisk === id
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {showAdvancedFilters && (
+          <div className="mt-4 grid gap-3 border-t border-slate-100 pt-4 sm:grid-cols-2 lg:grid-cols-4">
+            <FilterSelect
+              label="دسته‌بندی"
+              value={filterCategory}
+              onChange={setFilterCategory}
+              options={[
+                ['all', 'همه دسته‌ها'],
+                ['supplement', 'مکمل'],
+                ['cosmetic', 'آرایشی'],
+                ['otc_health', 'OTC / سلامت'],
+                ['sports_nutrition', 'تغذیه ورزشی'],
+              ]}
+            />
+
+            <FilterSelect
+              label="وضعیت موجودی"
+              value={filterStock}
+              onChange={(value) =>
+                setFilterStock(
+                  value as StockFilter,
+                )
+              }
+              options={[
+                ['all', 'همه'],
+                ['available', 'موجود'],
+                ['low', 'کمتر یا مساوی ۱۰'],
+                ['empty', 'ناموجود'],
+              ]}
+            />
+
+            <FilterSelect
+              label="انقضا"
+              value={filterExpiry}
+              onChange={(value) =>
+                setFilterExpiry(
+                  value as ExpiryFilter,
+                )
+              }
+              options={[
+                ['all', 'همه'],
+                ['lt30', 'کمتر از ۳۰ روز'],
+                ['30to90', '۳۰ تا ۹۰ روز'],
+                ['gt90', 'بیشتر از ۹۰ روز'],
+              ]}
+            />
+
+            <FilterSelect
+              label="مرتب‌سازی"
+              value={`${sortField}:${sortDirection}`}
+              onChange={(value) => {
+                const [field, direction] =
+                  value.split(':') as [
+                    SortField,
+                    SortDirection,
+                  ];
+
+                setSortField(field);
+                setSortDirection(direction);
+              }}
+              options={[
+                ['name:asc', 'نام محصول ↑'],
+                ['name:desc', 'نام محصول ↓'],
+                ['stock:desc', 'بیشترین موجودی'],
+                ['stock:asc', 'کمترین موجودی'],
+                ['available:desc', 'بیشترین موجودی آزاد'],
+                ['velocity:desc', 'بیشترین فروش روزانه'],
+                ['coverage:asc', 'کمترین پوشش'],
+                ['expiry:asc', 'نزدیک‌ترین انقضا'],
+                ['value:desc', 'بیشترین ارزش موجودی'],
+              ]}
+            />
+          </div>
+        )}
+
+        <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 text-[11px] text-slate-400">
+          <span>
+            {filteredItems.length} قلم از{' '}
+            {stockItems.length} قلم نمایش داده می‌شود
+          </span>
+
+          <span className="inline-flex items-center gap-1">
+            <ArrowDownUp className="h-3.5 w-3.5" />
+            مرتب‌سازی: {sortField === 'name'
+              ? 'نام'
+              : sortField === 'stock'
+                ? 'موجودی'
+                : sortField === 'available'
+                  ? 'موجودی آزاد'
+                  : sortField === 'velocity'
+                    ? 'فروش روزانه'
+                    : sortField === 'coverage'
+                      ? 'پوشش'
+                      : sortField === 'expiry'
+                        ? 'انقضا'
+                        : 'ارزش'}
+          </span>
+        </div>
+      </div>
+
+      {/* Inventory table */}
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1450px] text-right text-xs">
+            <thead className="border-b border-slate-200 bg-slate-50 text-slate-500">
+              <tr>
+                <SortableHeader
+                  label="محصول"
+                  onClick={() => toggleSort('name')}
+                />
+                <th className="px-3 py-3">
+                  دسته
+                </th>
+                <th className="px-3 py-3">
+                  بچ
+                </th>
+                <SortableHeader
+                  label="موجودی"
+                  onClick={() => toggleSort('stock')}
+                />
+                <SortableHeader
+                  label="آزاد"
+                  onClick={() => toggleSort('available')}
+                />
+                <SortableHeader
+                  label="فروش روزانه"
+                  onClick={() =>
+                    toggleSort('velocity')
+                  }
+                />
+                <SortableHeader
+                  label="پوشش"
+                  onClick={() =>
+                    toggleSort('coverage')
+                  }
+                />
+                <SortableHeader
+                  label="انقضا"
+                  onClick={() =>
+                    toggleSort('expiry')
+                  }
+                />
+                <SortableHeader
+                  label="ارزش"
+                  onClick={() => toggleSort('value')}
+                />
+                <th className="px-3 py-3">
+                  ریسک
+                </th>
+                <th className="px-4 py-3 text-center">
+                  عملیات
+                </th>
+              </tr>
+            </thead>
+
+            <tbody className="divide-y divide-slate-100">
+              {filteredItems.map((item) => {
+                const available = Math.max(
+                  0,
+                  item.currentStock -
+                    item.reservedStock,
+                );
+
+                const inventoryValue =
+                  item.currentStock *
+                  item.originalCost;
+
+                const isCritical =
+                  item.riskLevel === 'critical';
+
+                const isWarning =
+                  item.riskLevel === 'warning';
+
+                const isLow =
+                  item.riskLevel === 'low_stock';
+
+                const isDeleting =
+                  deletingId === item.id;
+
+                return (
+                  <tr
+                    key={item.id}
+                    className={`transition-colors hover:bg-slate-50/80 ${
+                      isCritical
+                        ? 'bg-rose-50/20'
+                        : isWarning
+                          ? 'bg-amber-50/20'
+                          : ''
+                    }`}
+                  >
+                    <td className="px-4 py-3.5">
+                      <div className="font-extrabold text-slate-900">
+                        {item.product.name}
+                      </div>
+
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px] text-slate-400">
+                        <span>
+                          IRC: {item.product.ircCode}
+                        </span>
+
+                        <span>
+                          GTIN: {item.product.gtin}
+                        </span>
+                      </div>
+                    </td>
+
+                    <td className="px-3 py-3">
+                      <span className="rounded-md bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-600">
+                        {categoryLabels[
+                          item.product.category
+                        ] ??
+                          item.product.category}
+                      </span>
+                    </td>
+
+                    <td className="px-3 py-3 font-mono font-bold text-slate-700">
+                      {item.batchNumber}
+                    </td>
+
+                    <td className="px-3 py-3">
+                      <div className="font-mono text-sm font-extrabold text-slate-900">
+                        {item.currentStock}
+                        <span className="mr-1 text-[10px] font-sans font-normal text-slate-500">
+                          {item.product.unit}
+                        </span>
+                      </div>
+
+                      {item.reservedStock > 0 && (
+                        <div className="text-[10px] font-bold text-amber-600">
+                          رزرو: {item.reservedStock}
+                        </div>
+                      )}
+                    </td>
+
+                    <td className="px-3 py-3">
+                      <div className="font-mono text-sm font-extrabold text-emerald-700">
+                        {available}
+                      </div>
+                    </td>
+
+                    <td className="px-3 py-3 font-mono font-semibold text-slate-700">
+                      {item.dailySalesVelocity}
+                    </td>
+
+                    <td className="px-3 py-3">
+                      <span
+                        className={`font-mono font-bold ${
+                          item.daysOfInventoryLeft !==
+                            null &&
+                          item.daysOfInventoryLeft <
+                            30
+                            ? 'text-rose-600'
+                            : 'text-slate-700'
+                        }`}
+                      >
+                        {item.daysOfInventoryLeft ??
+                          '—'}
+                      </span>
+
+                      {item.daysOfInventoryLeft !==
+                        null && (
+                        <span className="mr-1 text-[10px] text-slate-400">
+                          روز
+                        </span>
+                      )}
+                    </td>
+
+                    <td className="px-3 py-3">
+                      <div
+                        className={`font-mono font-bold ${
+                          item.daysToExpiry < 30
+                            ? 'text-rose-600'
+                            : item.daysToExpiry <= 90
+                              ? 'text-amber-600'
+                              : 'text-slate-700'
+                        }`}
+                      >
+                        {new Date(
+                          item.expiryDate,
+                        ).toLocaleDateString(
+                          'fa-IR',
+                        )}
+                      </div>
+
+                      <div
+                        className={`mt-0.5 text-[10px] font-bold ${
+                          item.daysToExpiry < 30
+                            ? 'text-rose-600'
+                            : item.daysToExpiry <= 90
+                              ? 'text-amber-600'
+                              : 'text-slate-400'
+                        }`}
+                      >
+                        {item.daysToExpiry} روز
+                      </div>
+                    </td>
+
+                    <td className="px-3 py-3">
+                      <div className="font-mono font-bold text-slate-800">
+                        {formatMoney(
+                          inventoryValue,
+                        )}
+                      </div>
+
+                      <div className="text-[10px] text-slate-400">
+                        ریال
+                      </div>
+                    </td>
+
+                    <td className="px-3 py-3">
+                      {isCritical && (
+                        <span className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-rose-100 px-2 py-1 text-[10px] font-bold text-rose-800">
+                          <AlertTriangle className="h-3 w-3" />
+                          بحرانی
+                        </span>
+                      )}
+
+                      {isWarning && (
+                        <span className="inline-flex rounded-md border border-amber-300 bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-800">
+                          هشدار
+                        </span>
+                      )}
+
+                      {item.riskLevel ===
+                        'optimal' && (
+                        <span className="inline-flex rounded-md border border-emerald-300 bg-emerald-100 px-2 py-1 text-[10px] font-bold text-emerald-800">
+                          بهینه
+                        </span>
+                      )}
+
+                      {isLow && (
+                        <span className="inline-flex rounded-md border border-blue-300 bg-blue-100 px-2 py-1 text-[10px] font-bold text-blue-800">
+                          کسری
+                        </span>
+                      )}
+                    </td>
+
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center justify-center gap-1.5">
+                        {canManageInventory && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openEditModal(item)
+                              }
+                              disabled={isDeleting}
+                              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
+                            >
+                              <Pencil className="h-3 w-3" />
+                              ویرایش
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void handleDelete(item)
+                              }
+                              disabled={isDeleting}
+                              className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px] font-bold text-rose-700 transition hover:bg-rose-100 disabled:opacity-50"
+                            >
+                              {isDeleting ? (
+                                <span className="h-3 w-3 animate-spin rounded-full border-2 border-rose-200 border-t-rose-700" />
+                              ) : (
+                                <Trash2 className="h-3 w-3" />
+                              )}
+                              حذف
+                            </button>
+                          </>
+                        )}
+
+                        {(isCritical || isWarning) && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handlePush(item)
+                            }
+                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] font-bold text-emerald-700 transition hover:bg-emerald-100"
+                          >
+                            <Sparkles className="h-3 w-3" />
+                            {pushedId === item.id
+                              ? 'ارسال شد'
+                              : 'B2B'}
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {filteredItems.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={11}
+                    className="px-4 py-16 text-center"
+                  >
+                    <div className="mx-auto flex max-w-md flex-col items-center">
+                      <Search className="h-10 w-10 text-slate-300" />
+
+                      <div className="mt-3 text-sm font-black text-slate-700">
+                        موردی مطابق فیلترها پیدا نشد
+                      </div>
+
+                      <p className="mt-1 text-xs text-slate-400">
+                        فیلترها یا عبارت جستجو را تغییر دهید.
+                      </p>
+
+                      {hasActiveFilters && (
+                        <button
+                          type="button"
+                          onClick={resetInventoryFilters}
+                          className="mt-4 rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white"
+                        >
+                          پاک‌سازی فیلترها
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 px-4 py-3 text-[10px] text-slate-400 sm:flex-row sm:items-center sm:justify-between">
+          <span>
+            داده‌ها مستقیماً از موجودی Backend داروخانه
+            خوانده می‌شوند.
+          </span>
+
+          <span className="inline-flex items-center gap-1 font-bold text-emerald-700">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            LIVE
+          </span>
+        </div>
+      </div>
+
+      {/* Create / Edit Modal */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div>
+                <h2 className="text-base font-black text-slate-900">
+                  {editingItem
+                    ? 'ویرایش موجودی'
+                    : 'ثبت موجودی جدید'}
+                </h2>
+
+                <p className="mt-1 text-xs text-slate-500">
+                  اطلاعات مستقیماً در Backend ذخیره می‌شود.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeModal}
+                disabled={saving}
+                className="text-slate-400 transition hover:text-slate-700 disabled:opacity-50"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleSubmit}
+              className="mt-5 space-y-4"
+            >
+              {error && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-bold text-rose-700">
+                  {error}
+                </div>
+              )}
+
+              {canSelectPharmacy && (
+                <div>
+                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                    داروخانه مقصد
+                  </label>
+
+                  <select
+                    value={activePharmacy.id}
+                    onChange={(event) => {
+                      const pharmacy =
+                        pharmacies.find(
+                          (item) =>
+                            item.id ===
+                            event.target.value,
+                        );
+
+                      if (pharmacy) {
+                        onPharmacyChange(
+                          pharmacy,
+                        );
+                      }
+                    }}
+                    disabled={Boolean(
+                      editingItem,
+                    )}
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold outline-none focus:border-medical-500 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {pharmacies.map(
+                      (pharmacy) => (
+                        <option
+                          key={pharmacy.id}
+                          value={pharmacy.id}
+                        >
+                          {pharmacy.name}
+                        </option>
+                      ),
+                    )}
+                  </select>
+
+                  {editingItem && (
+                    <p className="mt-1 text-[10px] text-slate-400">
+                      داروخانه یک قلم موجودی پس از ایجاد قابل تغییر نیست.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label className="mb-2 block text-xs font-bold text-slate-700">
+                  محصول
+                </label>
+
+                <select
+                  value={form.productId}
+                  onChange={(event) => {
+                    const product =
+                      products.find(
+                        (item) =>
+                          item.id ===
+                          event.target.value,
+                      );
+
+                    updateForm({
+                      productId:
+                        event.target.value,
+                      ...(product
+                        ? {
+                            sellingPrice:
+                              product.basePrice,
+                          }
+                        : {}),
+                    });
+                  }}
+                  required
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-semibold outline-none focus:border-medical-500"
+                >
+                  {products.map(
+                    (product) => (
+                      <option
+                        key={product.id}
+                        value={product.id}
+                      >
+                        {product.name} —{' '}
+                        {product.brand}
+                      </option>
+                    ),
+                  )}
+                </select>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                    شماره بچ
+                  </label>
+
+                  <input
+                    value={
+                      form.batchNumber
+                    }
+                    onChange={(event) =>
+                      updateForm({
+                        batchNumber:
+                          event.target.value,
+                      })
+                    }
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-sm outline-none focus:border-medical-500"
+                    placeholder="مثلاً BATCH-1405-001"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                    تاریخ انقضا
+                  </label>
+
+                  <input
+                    type="date"
+                    value={
+                      form.expiryDate
+                    }
+                    onChange={(event) =>
+                      updateForm({
+                        expiryDate:
+                          event.target.value,
+                      })
+                    }
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-sm outline-none focus:border-medical-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                    موجودی
+                  </label>
+
+                  <input
+                    type="number"
+                    min="0"
+                    value={
+                      form.currentStock
+                    }
+                    onChange={(event) =>
+                      updateForm({
+                        currentStock:
+                          Number(
+                            event.target
+                              .value,
+                          ),
+                      })
+                    }
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-sm outline-none focus:border-medical-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                    فروش روزانه
+                  </label>
+
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={
+                      form.dailySalesVelocity
+                    }
+                    onChange={(event) =>
+                      updateForm({
+                        dailySalesVelocity:
+                          Number(
+                            event.target
+                              .value,
+                          ),
+                      })
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-sm outline-none focus:border-medical-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                    قیمت خرید
+                  </label>
+
+                  <input
+                    type="number"
+                    min="0"
+                    value={
+                      form.originalCost
+                    }
+                    onChange={(event) =>
+                      updateForm({
+                        originalCost:
+                          Number(
+                            event.target
+                              .value,
+                          ),
+                      })
+                    }
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-sm outline-none focus:border-medical-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                    قیمت فروش
+                  </label>
+
+                  <input
+                    type="number"
+                    min="0"
+                    value={
+                      form.sellingPrice
+                    }
+                    onChange={(event) =>
+                      updateForm({
+                        sellingPrice:
+                          Number(
+                            event.target
+                              .value,
+                          ),
+                      })
+                    }
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-sm outline-none focus:border-medical-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-bold text-slate-700">
+                    حداقل قیمت B2B
+                  </label>
+
+                  <input
+                    type="number"
+                    min="0"
+                    value={
+                      form.minAcceptablePriceB2B
+                    }
+                    onChange={(event) =>
+                      updateForm({
+                        minAcceptablePriceB2B:
+                          Number(
+                            event.target
+                              .value,
+                          ),
+                      })
+                    }
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 font-mono text-sm outline-none focus:border-medical-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs leading-6 text-emerald-800">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+
+                <span>
+                  سطح ریسک، روزهای مانده تا انقضا و پوشش موجودی توسط Backend محاسبه می‌شود.
+                </span>
+              </div>
+
+              <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  disabled={saving}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  انصراف
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="inline-flex items-center gap-2 rounded-xl bg-medical-600 px-5 py-2.5 text-xs font-bold text-white transition hover:bg-medical-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {saving ? (
+                    <>
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                      در حال ذخیره...
+                    </>
+                  ) : editingItem ? (
+                    <>
+                      <Check className="h-4 w-4" />
+                      ذخیره تغییرات
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="h-4 w-4" />
+                      ثبت در موجودی
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
